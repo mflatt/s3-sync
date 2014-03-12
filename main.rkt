@@ -205,8 +205,9 @@
 
   (when download?
     (for ([key (in-hash-keys remote-content)])
-      (unless (set-member? local-content key)
-        (download key (key->f key)))))
+      (unless (regexp-match? #rx"/$" key)
+        (unless (set-member? local-content key)
+          (download key (key->f key))))))
 
   (when (and delete? upload?)
     (for ([key (in-hash-keys remote-content)])
