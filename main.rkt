@@ -14,7 +14,7 @@
          http/head
          xml)
 
-(provide sync)
+(provide s3-sync)
 
 (define-logger s3-sync)
 
