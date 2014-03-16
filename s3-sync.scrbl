@@ -3,6 +3,7 @@
           (for-label racket/base
                      racket/contract/base
                      s3-sync
+                     s3-sync/gzip
                      aws/s3
                      aws/keys))
 
@@ -52,6 +53,14 @@ The following options (supply them after @exec{s3-sync} and before
        whose name within the S3 bucket matches @nonterm{regexp} (even
        if they match an inclusion pattern).}
 
+ @item{@DFlag{gzip} @nonterm{regexp} --- on upload or for checking
+       download hashes (to avoid unnecessary downloads), compress files
+       whose name within the S3 bucket matches @nonterm{regexp}.}
+
+ @item{@DFlag{gzip-min} @nonterm{bytes} --- when combined with
+       @DFlag{gzip}, compress only files that are at least
+       @nonterm{bytes} in size.}
+
  @item{@DFlag{s3-hostname} @nonterm{hostname} --- set the S3 hostname
        to @nonterm{hostname} instead of @tt{s3.amazon.com}.}
 
@@ -80,11 +89,26 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [#:delete? delete? any/c #f]
                   [#:include include-rx (or/c #f regexp?) #f]
                   [#:exclude exclude-rx (or/c #f regexp?) #f]
+                  [#:make-call-with-input-file make-call-with-file-stream
+                                               (or/c #f (string?
+                                                         path?
+                                                         . -> . 
+                                                         (or/c #f
+                                                               (path?
+                                                                (input-port? . -> .  any)
+                                                                . -> . any))))
+                                               #f]
+                  [#:get-content-type get-content-type
+                                      (string? path? . -> . (or/c string? #f))
+                                      #f]
+                  [#:get-content-encoding get-content-encoding
+                                          (string? path? . -> . (or/c string? #f))
+                                          #f]
                   [#:acl acl (or/c #f string?) #f]
                   [#:reduced-redundancy? reduced-redundancy? any/c #f]
                   [#:link-mode link-mode (or/c 'error 'follow 'redirect 'ignore) 'error]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
-                  [#:error raise-error (symbol string? any/c ... . -> . any) error])
+                  [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
 
 Syncronizes the content of @racket[local-dir] and @racket[s3-path]
@@ -107,6 +131,30 @@ match the regexp are considered for synchronization. If
 @racket[exclude-rx] is not @racket[#f], then any item whose path
 matches is @emph{not} considered for synchronization (even if it also
 matches a provided @racket[include-rx]).
+
+If @racket[make-call-with-file-stream] is not @racket[#f], it is
+called to get a function that acts like @racket[call-with-input-file]
+to get the content of a file for upload or for hashing. The arguments
+to @racket[make-call-with-file-stream] are the S3 name and the local
+file path. If @racket[make-call-with-file-stream] or its result is
+@racket[#f], then @racket[call-with-input-file] is used. See also
+@racket[make-gzip-handlers].
+
+If @racket[get-content-type] is not @racket[#f], it is called to get
+the @tt{Content-Type} field for each file on upload. The arguments to
+@racket[get-content-type] are the S3 name and the local file path. If
+@racket[get-content-type] or its result is @racket[#f], then a default
+value is used based on the file extension (e.g., @racket["text/css"]
+for a @filepath{css} file).
+
+The @racket[get-content-encoding] argument is like
+@racket[get-content-type], but for the @tt{Content-Encoding} field. If
+no encoding is provided for an item, a @tt{Content-Encoding} field is
+omitted on upload. Note that the @tt{Content-Encoding} field of an
+item can affect the way that it is downloaded from a bucket; for
+example, a bucket item whose encoding is @racket["gzip"] will be
+uncompressed on download, even though the item's hash (which is used
+to avoid unnecessary downloads) is based on the encoded content.
 
 If @racket[acl] is not @racket[#f], then it is as the S3 access
 control list on upload. For example, supply @racket["public-read"] to
@@ -137,3 +185,20 @@ The @racket[log-info] and @racket[raise-error] arguments determine how
 progress is logged and errors are reported. The default
 @racket[log-info] function logs the given string at the @racket['info]
 level to a logger whose name is @racket['s3-sync].}
+
+@section{S3 gzip Support}
+
+@defmodule[s3-sync/gzip]
+
+@defproc[(make-gzip-handlers [pattern (or/c regexp? string? bytes?)]
+                             [#:min-size min-size exact-nonnegative-integer? 0])
+         (values (string? path? . -> . (or/c #f
+                                             (path? (input-port? . -> .  any)
+                                              . -> . any)))
+                 (string? path? . -> . (or/c string? #f)))]{
+
+Returns values that are suitable as the
+@racket[#:make-call-with-input-file] and
+@racket[#:get-content-encoding] arguments to @racket[s3-sync] to
+compress items whose name within the bucket matches @racket[pattern]
+and whose local file size is at least @racket[min-size] bytes.}

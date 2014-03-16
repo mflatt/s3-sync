@@ -35,13 +35,13 @@
 (define MULTIPART-THRESHOLD (* 1024 1024 10))
 (define CHUNK-SIZE MULTIPART-THRESHOLD)
 
-(define (file-md5 f)
+(define (file-md5 f call-with-file-stream)
   (cond
    [((file-size f) . > . MULTIPART-THRESHOLD)
     (define buffer (make-bytes CHUNK-SIZE))
     (define-values (i o) (make-pipe))
     (define n 
-      (call-with-input-file f
+      (call-with-file-stream f
         (lambda (i)
           (let loop ([n 0])
             (define m (read-bytes! buffer i))
@@ -56,7 +56,7 @@
     (close-output-port o)
     (string-append (md5 i) "-" (number->string n))]
    [else
-    (call-with-input-file f md5)]))
+    (call-with-file-stream f md5)]))
 
 (define (s3-sync src-dir bucket sub
                  #:upload? [upload? #t]
@@ -65,6 +65,9 @@
                  #:delete? [delete? #f]
                  #:include [include-rx #f]
                  #:exclude [exclude-rx #f]
+                 #:make-call-with-input-file [make-call-with-file-stream #f]
+                 #:get-content-type [get-content-type #f]
+                 #:get-content-encoding [get-content-encoding #f]
                  #:acl [acl #f]
                  #:reduced-redundancy? [reduced-redundancy? #f]
                  #:link-mode [link-mode 'error]
@@ -133,14 +136,14 @@
            f
            s))
 
-  (define (download key f)
-    (log-info (format "Download: ~a to: ~a" key f))
+  (define (download what key f)
+    (log-info (format "Download ~a: ~a to: ~a" what key f))
     (unless dry-run?
-      (let-values ([(base name dir?) (split-path (build-path src-dir f))])
+      (let-values ([(base name dir?) (split-path f)])
         (when (path? base)
           (make-directory* base)))
       (get/file (b+p f)
-                (build-path src-dir f)
+                f
                 #:exists 'truncate/replace)))
 
   (define (b+p f)
@@ -161,6 +164,9 @@
                [else key]))
     (apply build-path (string-split p "/")))
   
+  (define (in-sub f)
+    (path->string (if sub (build-path sub f) f)))
+
   (define local-content
     (if (and download?
              (not (directory-exists? src-dir))
@@ -168,26 +174,37 @@
         (set)
         (parameterize ([current-directory src-dir])
           (for/set ([f (in-directory #f (lambda (dir)
-                                          (and (included? dir)
+                                          (and (included? (in-sub dir))
                                                (case link-mode
                                                  [(redirect ignore) (not (link-exists? dir))]
                                                  [(error) (check-link-exists dir)]
                                                  [else #t]))))]
-                    #:when (and (included? f)
+                    #:when (and (included? (in-sub f))
                                 (case link-mode
                                   [(follow) #t]
                                   [(redirect ignore) (not (link-exists? f))]
                                   [(error) (check-link-exists f)])
                                 (file-exists? f)))
             
-            (define key (path->string (if sub (build-path sub f) f)))
+            (define key (in-sub f))
             (define old (hash-ref remote-content key #f))
-            (define new (file-md5 f))
+            (define call-with-file-stream (and make-call-with-file-stream
+                                               (make-call-with-file-stream key f)))
+            (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
             (cond
              [(equal? old new)
               (void)]
              [upload?
-              (log-info (format "Upload: ~a to: ~a as: ~a" f key (path->content-type f)))
+              (define content-type (or (and get-content-type
+                                            (get-content-type key f))
+                                       (path->content-type key)))
+              (define content-encoding (and get-content-encoding
+                                            (get-content-encoding key f)))
+              (log-info (format "Upload: ~a to: ~a as: ~a~a"
+                                f
+                                key 
+                                content-type
+                                (if content-encoding (format " ~a" content-encoding) "")))
               (unless dry-run?
                 (define s
                   ((if ((file-size f) . > . MULTIPART-THRESHOLD)
@@ -195,19 +212,30 @@
                        put-file-via-bytes)
                    (b+p f)
                    f
-                   (path->content-type f)
-                   upload-props))
+                   call-with-file-stream
+                   content-type
+                   (if content-encoding
+                       (hash-set upload-props 'Content-Encoding content-encoding)
+                       upload-props)))
                 (when s
                   (failure "put" f s)))]
              [old
-              (download key f)])
+              (download "changed" key f)])
             key))))
 
   (when download?
-    (for ([key (in-hash-keys remote-content)])
-      (unless (regexp-match? #rx"/$" key)
-        (unless (set-member? local-content key)
-          (download key (key->f key))))))
+    ;; Get list of needed files, then sort, then download:
+    (define needed
+      (for/list ([key (in-hash-keys remote-content)]
+                 #:unless (regexp-match? #rx"/$" key)
+                 #:unless (set-member? local-content key))
+        key))
+    (unless (null? needed)
+      (let ([needed (sort needed string<?)])
+        (make-directory* src-dir)
+        (parameterize ([current-directory src-dir])
+          (for ([key (in-list needed)])
+            (download "new" key (key->f key)))))))
 
   (when (and delete? upload?)
     (for ([key (in-hash-keys remote-content)])
@@ -233,7 +261,7 @@
       (parameterize ([current-directory src-dir])
         (for/list ([f (in-directory #f (lambda (dir)
                                          (not (link-exists? dir))))]
-                   #:when (and (included? f)
+                   #:when (and (included? (in-sub f))
                                (link-exists? f)))
           (define raw-dest (resolve-path f))
           (define dest (path->complete-path 
@@ -255,21 +283,37 @@
     (unless (null? link-content)
       (add-links bucket link-content log-info error))))
 
-(define (put-file-via-bytes dest fn mime-type heads)
-  (define s (put/bytes dest (file->bytes fn) mime-type heads))
+(define (put-file-via-bytes dest fn call-with-file-stream mime-type heads)
+  (define s (put/bytes dest 
+                       (if call-with-file-stream 
+                           (call-with-file-stream fn port->bytes)
+                           (file->bytes fn))
+                       mime-type
+                       heads))
   (if (member (extract-http-code s) '(200))
       #f ; => ok
       s))
   
-(define (multipart-put-file-via-bytes dest fn mime-type heads)
+(define (multipart-put-file-via-bytes dest fn call-with-file-stream mime-type heads)
+  (define bytes
+    (and call-with-file-stream
+         (call-with-file-stream fn port->bytes)))
+        
   (define s
     (multipart-put dest
-		   (ceiling (/ (file-size fn) CHUNK-SIZE))
+		   (ceiling (/ (if bytes
+                                   (bytes-length bytes)
+                                   (file-size fn))
+                               CHUNK-SIZE))
 		   (lambda (n)
-		     (call-with-input-file fn
-		       (lambda (i)
-			 (file-position i (* n CHUNK-SIZE))
-			 (read-bytes CHUNK-SIZE i))))
+                     (if bytes
+                         (subbytes bytes (* n CHUNK-SIZE) 
+                                   (min (* (add1 n) CHUNK-SIZE)
+                                        (bytes-length bytes)))
+                         (call-with-input-file fn
+                           (lambda (i)
+                             (file-position i (* n CHUNK-SIZE))
+                             (read-bytes CHUNK-SIZE i)))))
 		   mime-type
 		   heads))
   ;; How do we check s?
@@ -355,7 +399,10 @@
   (unless (member (extract-http-code resp) '(200))
     (error 's3-sync "redirection-rules update failed")))
 
+
 (module+ main
+  (require "gzip.rkt")
+
   (define s3-hostname "s3.amazonaws.com")
 
   (define dry-run? #f)
@@ -363,6 +410,8 @@
   (define link-mode 'error)
   (define include-rx #f)
   (define exclude-rx #f)
+  (define gzip-rx #f)
+  (define gzip-size 0)
   (define s3-acl #f)
   (define reduced-redundancy? #f)
 
@@ -391,6 +440,13 @@
       (set! include-rx (check-regexp rx))]
      [("--exclude") rx "Exclude matching remote paths"
       (set! exclude-rx (check-regexp rx))]
+     [("--gzip") rx "Gzip matching remote paths"
+      (set! gzip-rx (check-regexp rx))]
+     [("--gzip-min") bytes "Gzip only files larger than <bytes>"
+      (define n (string->number bytes))
+      (unless (exact-nonnegative-integer? n)
+        (raise-user-error 's3-sync "bad number: ~a" bytes))
+      (set! gzip-size n)]
      [("--s3-hostname") hostname "Set S3 hostname (instead of `s3.amazon.com`)"
       (set! s3-hostname hostname)]
      #:once-any
@@ -440,6 +496,11 @@
   (ensure-have-keys)
   (s3-host s3-hostname)
 
+  (define-values (call-with-gzip-file gzip-content-encoding)
+    (if gzip-rx
+        (make-gzip-handlers gzip-rx #:min-size gzip-size)
+        (values #f #f)))
+
   (s3-sync local-dir
            s3-bucket
            s3-sub
@@ -449,6 +510,8 @@
            #:error raise-user-error
            #:include include-rx
            #:exclude exclude-rx
+           #:make-call-with-input-file call-with-gzip-file
+           #:get-content-encoding gzip-content-encoding
            #:log displayln
            #:link-mode link-mode
            #:delete? delete?
