@@ -8,6 +8,7 @@
          racket/format
          racket/port
          racket/set
+         racket/list
          openssl/md5
          net/url
          net/uri-codec
@@ -238,14 +239,23 @@
             (download "new" key (key->f key)))))))
 
   (when (and delete? upload?)
-    (for ([key (in-hash-keys remote-content)])
-      (unless (set-member? local-content key)
-        (log-info (format "Removing remote: ~a" key))
+    (define discards
+      (for/list ([key (in-hash-keys remote-content)]
+                 #:unless (set-member? local-content key))
+        key))
+    (let loop ([discards (sort discards string<?)]
+               [len (length discards)])
+      (unless (zero? len)
+        (define this-len (min 500 len))
+        (define keys (take discards this-len))
+        (for ([key (in-list keys)])
+          (log-info (format "Removing remote: ~a" key)))
         (unless dry-run?
           (define s
-            (delete (~a bucket "/" (encode-path key))))
+            (delete-multiple bucket (map encode-path keys)))
           (unless (member (extract-http-code s) '(200 204))
-            (failure "delete" key s))))))
+            (failure "delete" (first keys) s)))
+        (loop (list-tail discards this-len) (- len this-len)))))
   
   (when (and delete? download?)
     (for ([key (in-set local-content)])
