@@ -15,7 +15,9 @@ Syncronize an S3 bucket and a filesystem directory using
 
 where either @nonterm{src} or @nonterm{dest} should start with
 @exec{s3://} to identify a bucket and prefix, while the other is a
-directory path in the local filesystem.
+directory path in the local filesystem. Naturally, a @litchar{/}
+within a bucket item's name corresponds to a directory separator in
+the local filesystem.
 
 For example, to upload the content of @nonterm{src-dir} with a prefix
 @nonterm{dest-path} within @nonterm{bucket}, use
@@ -34,6 +36,13 @@ The following options (supply them after @exec{s3-sync} and before
 
  @item{@DFlag{dry-run} --- report actions that would be taken, but
        don't upload, download, delete, or change redirection rules.}
+
+ @item{@DFlag{shallow} --- when downloading, constrain downloads to
+       existing directories at @nonterm{dest} (i.e., no additional
+       subdirectories); in both upload and download modes, extract the
+       current bucket state in a directory-like way (which is useful
+       if the bucket contains many more nested items than the local
+       filesystem)}
 
  @item{@DFlag{delete} --- delete destination items that have no
        corresponding source item.}
@@ -85,6 +94,7 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [s3-bucket string?]
                   [s3-path (or/c #f string?)]
                   [#:upload? upload? any/c #t]
+                  [#:shallow? shallow? any/c #f]
                   [#:dry-run? dry-run? any/c #f]
                   [#:delete? delete? any/c #f]
                   [#:include include-rx (or/c #f regexp?) #f]
@@ -111,12 +121,21 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
 
-Syncronizes the content of @racket[local-dir] and @racket[s3-path]
+Synchronizes the content of @racket[local-dir] and @racket[s3-path]
 within @racket[s3-bucket], where @racket[s3-path] can be @racket[#f]
 to indicate an upload to the bucket with no prefix path. If
 @racket[upload?] is true, @racket[s3-bucket] is changed to have the
 content of @racket[local-dir], otherwise @racket[local-dir] is changed
 to have the content of @racket[s3-bucket].
+
+If @racket[shallow?] is true, then in download mode, bucket items are
+downloaded only when they correspond to directories that exist already
+in @racket[local-dir]. In both download and upload modes, a true value
+of @racket[shallow?] causes the state of @racket[s3-bucket] to be
+queried in a directory-like way, exploring only relevant directories;
+that exploration can be faster than querying the full content of
+@racket[s3-bucket] if it contains many more nested items (with the
+prefix @racket[s3-path]) than files within @racket[local-dir].
 
 If @racket[dry-run?] is true, then actions needed for synchronization
 are reported via @racket[log], but no uploads, downloads, deletions,

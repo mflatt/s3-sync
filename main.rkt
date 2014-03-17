@@ -59,11 +59,12 @@
    [else
     (call-with-file-stream f md5)]))
 
-(define (s3-sync src-dir bucket sub
+(define (s3-sync src-dir bucket given-sub
                  #:upload? [upload? #t]
                  #:error [error error]
                  #:dry-run? [dry-run? #f]
                  #:delete? [delete? #f]
+                 #:shallow? [shallow? #f]
                  #:include [include-rx #f]
                  #:exclude [exclude-rx #f]
                  #:make-call-with-input-file [make-call-with-file-stream #f]
@@ -74,6 +75,13 @@
                  #:link-mode [link-mode 'error]
                  #:log [log-info (lambda (s)
                                    (log-s3-sync-info s))])
+  (define sub
+    ;; Clean up empty `sub' and/or trailing "/"
+    (and given-sub
+         (if (equal? given-sub "")
+             #f
+             (regexp-replace #rx"/+$" given-sub ""))))
+
   (log-info (let ([remote (~a bucket
                               (if sub (~a "/" (encode-path sub)) ""))]
                   [local src-dir])
@@ -102,24 +110,10 @@
                (regexp-match? include-rx s))
            (or (not exclude-rx)
                (not (regexp-match? exclude-rx s))))))
-  
-  (log-info "Getting current S3 content...")
-  (define (get-name x)
-    (caddr (assq 'Key (cddr x))))
-  (define (get-etag x)
-    (cadddr (assq 'ETag (cddr x))))
-  (define remote-content
-    (ls/proc (~a bucket "/" (if sub
-                                (~a (encode-path sub) "/")
-                                ""))
-             (lambda (ht xs)
-               (for/fold ([ht ht]) ([x (in-list xs)]
-                                    #:when (included? (get-name x)))
-                 (hash-set ht
-                           (get-name x)
-                           (get-etag x))))
-             (hash)))
-  (log-info "... got it.")
+
+  (define (in-sub f)
+    ;; relies on item names matching path syntax:
+    (path->string (if sub (build-path sub f) f)))
 
   (define (check-link-exists f)
     (if (link-exists? f)
@@ -128,6 +122,60 @@
                    "  path: ~a")
                f)
         #t))
+
+  (define (use-src-dir? dir)
+    ;; Don't check inclusions or exclusions here, because
+    ;; those are meant to be applied to item names, not partial
+    ;; item names.
+    (case link-mode
+      [(redirect ignore) (not (link-exists? dir))]
+      [(error) (check-link-exists dir)]
+      [else #t]))
+
+  (define local-directories
+    (and shallow?
+         (if (directory-exists? src-dir)
+             (parameterize ([current-directory src-dir])
+               (set-add
+                (for/set ([f (in-directory #f use-src-dir?)]
+                          #:when (and (directory-exists? f)
+                                      (use-src-dir? f)))
+                  (in-sub f))
+                #f))
+             (set))))
+
+  (log-info "Getting current S3 content...")
+  (define (get-name x)
+    (caddr (assq 'Key (cddr x))))
+  (define (get-prefix x)
+    (caddr (assq 'Prefix (cddr x))))
+  (define (get-etag x)
+    (cadddr (assq 'ETag (cddr x))))
+  (define remote-content
+    (let loop ([sub sub] [ht (hash)])
+      (if (or (not shallow?)
+              (set-member? local-directories sub))
+          (ls/proc (~a bucket "/" (if sub
+                                      (~a (encode-path sub) "/")
+                                      ""))
+                   #:delimiter (and shallow? "/")
+                   (lambda (ht xs)
+                     (for/fold ([ht ht]) ([x (in-list xs)])
+                       (case (car x)
+                         [(Contents)
+                          (if (included? (get-name x))
+                              (hash-set ht
+                                        (get-name x)
+                                        (get-etag x))
+                              ht)]
+                         [(CommonPrefixes)
+                          (define prefix (get-prefix x))
+                          (define prefix-no-/
+                            (substring prefix 0 (sub1 (string-length prefix))))
+                          (loop prefix-no-/ ht)])))
+                   ht)
+          ht)))
+  (log-info "... got it.")
 
   (define (failure what f s)
     (error 's3-sync (~a "~a failed\n"
@@ -165,21 +213,13 @@
                [else key]))
     (apply build-path (string-split p "/")))
   
-  (define (in-sub f)
-    (path->string (if sub (build-path sub f) f)))
-
   (define local-content
     (if (and download?
              (not (directory-exists? src-dir))
              (not (link-exists? src-dir)))
         (set)
         (parameterize ([current-directory src-dir])
-          (for/set ([f (in-directory #f (lambda (dir)
-                                          (and (included? (in-sub dir))
-                                               (case link-mode
-                                                 [(redirect ignore) (not (link-exists? dir))]
-                                                 [(error) (check-link-exists dir)]
-                                                 [else #t]))))]
+          (for/set ([f (in-directory #f use-src-dir?)]
                     #:when (and (included? (in-sub f))
                                 (case link-mode
                                   [(follow) #t]
@@ -416,6 +456,7 @@
   (define s3-hostname "s3.amazonaws.com")
 
   (define dry-run? #f)
+  (define shallow? #f)
   (define delete? #f)
   (define link-mode 'error)
   (define include-rx #f)
@@ -440,6 +481,8 @@
      #:once-each
      [("--dry-run") "Show changes without making them"
       (set! dry-run? #t)]
+     [("--shallow") "Constrain to existing <src> directories"
+      (set! shallow? #t)]
      [("--delete") "Remove files in destination with no source"
       (set! delete? #t)]
      [("--acl") acl "Access control list for upload"
@@ -514,6 +557,7 @@
   (s3-sync local-dir
            s3-bucket
            s3-sub
+           #:shallow? shallow?
            #:upload? upload?
            #:acl s3-acl
            #:reduced-redundancy? reduced-redundancy?
