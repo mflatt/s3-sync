@@ -7,6 +7,7 @@
                ("base" #:version "6.0.0.4")))
 
 (define build-deps '("scribble-lib"
-                     "racket-doc"))
+                     "racket-doc"
+                     "rackunit-lib"))
 
 (define scribblings '(("s3-sync.scrbl" () (tool))))
