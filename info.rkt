@@ -2,7 +2,7 @@
 
 (define collection "s3-sync")
 
-(define deps '("aws"
+(define deps '(("aws" #:version "0.2")
                "http"
                ("base" #:version "6.0.0.4")))
 
@@ -11,3 +11,5 @@
                      "rackunit-lib"))
 
 (define scribblings '(("s3-sync.scrbl" () (tool))))
+
+(define version "1.1")
