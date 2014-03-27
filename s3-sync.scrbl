@@ -37,6 +37,9 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{dry-run} --- report actions that would be taken, but
        don't upload, download, delete, or change redirection rules.}
 
+ @item{@DFlag{jobs} @nonterm{n} or @Flag{j} @nonterm{n} --- perform up
+       to @nonterm{n} downloads or uploads in parallel.}
+
  @item{@DFlag{shallow} --- when downloading, constrain downloads to
        existing directories at @nonterm{dest} (i.e., no additional
        subdirectories); in both upload and download modes, extract the
@@ -94,6 +97,7 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [s3-bucket string?]
                   [s3-path (or/c #f string?)]
                   [#:upload? upload? any/c #t]
+                  [#:jobs jobs inexact-positive-integer? 1]
                   [#:shallow? shallow? any/c #f]
                   [#:dry-run? dry-run? any/c #f]
                   [#:delete? delete? any/c #f]
@@ -140,6 +144,9 @@ prefix @racket[s3-path]) than files within @racket[local-dir].
 If @racket[dry-run?] is true, then actions needed for synchronization
 are reported via @racket[log], but no uploads, downloads, deletions,
 or redirection-rule updates are performed.
+
+If @racket[jobs] is more than @racket[1], then downloads and uploads
+proceed in background threads.
 
 If @racket[delete?] is true, then destination items that have no
 corresponding item at the source are deleted.
