@@ -14,7 +14,8 @@
          net/uri-codec
          http/head
          http/request
-         xml)
+         xml
+         raco/command-name)
 
 (provide s3-sync)
 
@@ -572,6 +573,7 @@
 
   (define-values (src dest)
     (command-line
+     #:program (short-program+command-name)
      #:once-each
      [("--dry-run") "Show changes without making them"
       (set! dry-run? #t)]

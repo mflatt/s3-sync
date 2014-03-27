@@ -13,3 +13,9 @@
 (define scribblings '(("s3-sync.scrbl" () (tool))))
 
 (define version "1.1")
+
+(define raco-commands
+  (list (list "s3-sync"
+              '(submod s3-sync main)
+              "sychronize an S3 bucket and filesystem directory"
+              #f)))

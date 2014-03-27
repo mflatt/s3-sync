@@ -11,7 +11,7 @@
 
 Syncronize an S3 bucket and a filesystem directory using
 
-@commandline{racket -l- s3-sync @nonterm{src} @nonterm{dest}}
+@commandline{raco s3-sync @nonterm{src} @nonterm{dest}}
 
 where either @nonterm{src} or @nonterm{dest} should start with
 @exec{s3://} to identify a bucket and prefix, while the other is a
@@ -22,12 +22,12 @@ the local filesystem.
 For example, to upload the content of @nonterm{src-dir} with a prefix
 @nonterm{dest-path} within @nonterm{bucket}, use
 
-@commandline{racket -l- s3-sync @nonterm{src-dir} s3://@nonterm{bucket}/@nonterm{dest-path}}
+@commandline{raco s3-sync @nonterm{src-dir} s3://@nonterm{bucket}/@nonterm{dest-path}}
 
 To download the items with prefix @nonterm{src-path} within
 @nonterm{bucket} to @nonterm{dest-dir}, use
 
-@commandline{racket -l- s3-sync s3://@nonterm{bucket}/@nonterm{src-path} @nonterm{dest-dir}}
+@commandline{raco s3-sync s3://@nonterm{bucket}/@nonterm{src-path} @nonterm{dest-dir}}
 
 The following options (supply them after @exec{s3-sync} and before
 @nonterm{src}) are supported:
