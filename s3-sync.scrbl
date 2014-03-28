@@ -9,7 +9,7 @@
 
 @title{AWS S3 Synchronization}
 
-Syncronize an S3 bucket and a filesystem directory using
+Synchronize an S3 bucket and a filesystem directory using
 
 @commandline{raco s3-sync @nonterm{src} @nonterm{dest}}
 
@@ -82,6 +82,10 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{redirect-links} --- treat soft links as redirection
        rules to be installed for @nonterm{bucket} as a web site.}
  @item{@DFlag{ignore-links} --- ignore soft links.}
+
+ @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
+       redundancy, and compression for @filepath{.html}, @filepath{.css},
+       and @filepath{.js} files that are 1K or larger.}
 
 ]
 

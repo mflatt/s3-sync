@@ -557,7 +557,7 @@
   (define include-rx #f)
   (define exclude-rx #f)
   (define gzip-rx #f)
-  (define gzip-size 0)
+  (define gzip-size -1)
   (define s3-acl #f)
   (define reduced-redundancy? #f)
 
@@ -612,6 +612,12 @@
       (set! link-mode 'follow)]
      [("--ignore-links") "Ignore soft links"
       (set! link-mode 'ignore)]
+     #:once-each
+     [("--web") "Set defaults suitable for web sites"
+      (unless s3-acl (set! s3-acl "public-read"))
+      (set! reduced-redundancy? #t)
+      (unless gzip-rx (set! gzip-rx #rx"[.](html|css|js)$"))
+      (when (= -1 gzip-size) (set! gzip-size (* 1 1024)))]
      #:args
      (src dest)
      (values src dest)))
@@ -652,7 +658,7 @@
 
   (define-values (call-with-gzip-file gzip-content-encoding)
     (if gzip-rx
-        (make-gzip-handlers gzip-rx #:min-size gzip-size)
+        (make-gzip-handlers gzip-rx #:min-size (max 0 gzip-size))
         (values #f #f)))
 
   (s3-sync local-dir
