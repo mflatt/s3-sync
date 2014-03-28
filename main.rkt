@@ -102,7 +102,7 @@
   (with-handlers ([exn:break? (lambda (exn)
                                 (interrupt-tasks)
                                 (raise exn))])
-    (parameterize ([current-pool-timeout 10]) ; from http/request (version 0.2)
+    (parameterize (#;[current-pool-timeout 10]) ; from http/request (version 0.2)
 
       (define sub
         ;; Clean up empty `sub' and/or trailing "/"

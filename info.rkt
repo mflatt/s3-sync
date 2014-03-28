@@ -3,7 +3,7 @@
 (define collection "s3-sync")
 
 (define deps '(("aws" #:version "0.2")
-               ("http" #:version "0.2")
+               "http"
                ("base" #:version "6.0.0.4")))
 
 (define build-deps '("scribble-lib"
