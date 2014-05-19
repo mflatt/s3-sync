@@ -24,8 +24,10 @@
 (define (path->content-type p)
   (case (filename-extension p)
     [(#"html") "text/html"]
+    [(#"txt") "text/plain"]
     [(#"png") "image/png"]
     [(#"gif") "image/gif"]
+    [(#"svg") "image/svg+xml"]
     [(#"js") "text/javascript"]
     [(#"css") "text/css"]
     [else "application/octet-stream"]))
