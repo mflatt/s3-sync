@@ -3,6 +3,7 @@
          s3-sync/gzip
          aws/keys
          aws/s3
+         net/head
          rackunit)
 
 ;; To run this test, create "~/.aws-tests-data" and
@@ -31,8 +32,17 @@
    (build-path dir f)
    (lambda (o) (display content o))))
 
+(define (create-link dest f)
+  (make-file-or-directory-link dest (build-path dir f)))
+
+(define (create-dir f)
+  (make-directory* (build-path dir f)))
+
 (define (remove-file f)
   (delete-file (build-path dir f)))
+
+(define (remove-all f)
+  (delete-directory/files (build-path dir f)))
 
 (define (file-content f)
   (file->string (build-path dir f)))
@@ -43,6 +53,10 @@
                      #:when (file-exists? f))
             (string-join (map path-element->string (explode-path f)) "/")))
         string<?))
+
+(define (get-link p)
+  (define h (head (~a bucket/ p)))
+  (extract-field "x-amz-website-redirect-location" h))
 
 (ensure-have-keys)
 (s3-host "s3.amazonaws.com")
@@ -101,6 +115,51 @@
   (check-equal? (file-content "x_test") "No one pulls you")
   (check-equal? (file-content "y_test") "Out from your hole")
   (check-equal? (file-content "z_test") "No one tries")
+
+  (unless (eq? (system-type) 'windows)
+    (step "Error on links")
+    (create-link "z_test" "also_z_test")
+    (check-equal? 'as-expected
+                  (with-handlers ([exn:fail? (lambda (exn)
+                                               (if (regexp-match? #rx"encountered soft link"
+                                                                  (exn-message exn))
+                                                   'as-expected
+                                                   exn))])
+                    (s3-sync dir bucket #f #:jobs jobs)))
+    
+    (step "Follow link")
+    (s3-sync dir bucket #f #:jobs jobs #:link-mode 'follow)
+    (check-equal? (ls bucket/) '("also_z_test" "x_test" "y_test" "z_test"))
+    (remove-file "also_z_test")
+    (set! plan-count 0)
+    (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
+    (check-equal? plan-count 1)
+    (check-equal? (file-content "also_z_test") (file-content "z_test"))
+
+    (step "Redirect link")
+    (remove-file "also_z_test")
+    (create-link "z_test" "also_z_test")
+    (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
+    (check-equal? (get-link "also_z_test") "/z_test")
+    (remove-file "also_z_test")
+    (set! plan-count 0)
+    (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
+    (check-equal? plan-count 1)
+    (check-equal? (file-content "also_z_test") "")
+    (remove-file "also_z_test")
+
+    (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
+    (check-equal? (ls bucket/) '("x_test" "y_test" "z_test"))
+
+    (step "Redirect directory link")
+    (create-dir "sub")
+    (create-link "../z_test" "sub/also_z_test")
+    (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
+    (check-equal? (get-link "sub/also_z_test") "/z_test")
+    (remove-all "sub")
+    
+    (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
+    (check-equal? (ls bucket/) '("x_test" "y_test" "z_test")))
 
   (step "Upload to specified prefix")
   (make-directory (build-path dir "sub"))

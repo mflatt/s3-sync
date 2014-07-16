@@ -284,6 +284,27 @@
                        f
                        #:exists 'truncate/replace)))))
 
+      (define abs-src-dir (path->complete-path src-dir))
+      (define (link->dest f)
+        (define raw-dest (resolve-path f))
+        (define dest (path->complete-path 
+                      raw-dest
+                      (let-values ([(base name dir?) (split-path f)])
+                        (if (eq? base 'relative)
+                            abs-src-dir
+                            (build-path abs-src-dir base)))))
+        (define rel-dest (find-relative-path (simplify-path abs-src-dir #f)
+                                             (simplify-path dest #f)))
+        (unless (and (relative-path? rel-dest)
+                     (not (memq 'up (explode-path rel-dest))))
+          (error 's3-sync
+                 (~a "link does not stay within directory\n"
+                     "  source path: ~a\n"
+                     "  destination path: ~a")
+                 f
+                 raw-dest))
+        rel-dest)
+
       (define (b+p f)
         (~a bucket "/"
             (if sub (~a (encode-path sub) "/") "")
@@ -308,54 +329,86 @@
                  (not (link-exists? src-dir)))
             (set)
             (parameterize ([current-directory src-dir])
-              (for/set ([f (in-directory #f use-src-dir?)]
-                        #:when (and (included? (in-sub f))
-                                    (case link-mode
-                                      [(follow) #t]
-                                      [(redirect ignore) (not (link-exists? f))]
-                                      [(error) (check-link-exists f)])
-                                    (file-exists? f)))
-                
-                (define key (in-sub f))
-                (define old (hash-ref remote-content key #f))
-                (define call-with-file-stream (and make-call-with-file-stream
-                                                   (make-call-with-file-stream key f)))
-                (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
+              (let loop ([f #f] [in-link #f] [result (set)])
                 (cond
-                 [(equal? old new)
-                  (void)]
-                 [upload?
-                  (define content-type (or (and get-content-type
-                                                (get-content-type key f))
-                                           (path->content-type key)))
-                  (define content-encoding (and get-content-encoding
-                                                (get-content-encoding key f)))
-                  (define task-id (get-task-id))
-                  (log-info (format "Upload: ~a as: ~a~a~a"
-                                    (format-to f key)
-                                    content-type
-                                    (if content-encoding (format " ~a" content-encoding) "")
-                                    (task-id-str task-id)))
-                  (unless dry-run?
-                    (task!
-                     task-id
-                     (lambda ()
-                       (define s
-                         ((if ((file-size f) . > . MULTIPART-THRESHOLD)
-                              multipart-put-file-via-bytes
-                              put-file-via-bytes)
-                          (b+p f)
-                          f
-                          call-with-file-stream
-                          content-type
-                          (if content-encoding
-                              (hash-set upload-props 'Content-Encoding content-encoding)
-                              upload-props)))
-                       (when s
-                         (failure "put" f s)))))]
-                 [old
-                  (download "changed" key f)])
-                key))))
+                 [(not f)
+                  (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
+                    (loop s #f result))]
+                 [(not (and (included? (in-sub f))
+                            (case link-mode
+                              [(follow redirects) #t]
+                              [(redirect ignore) (not (link-exists? f))]
+                              [(error) (check-link-exists f)])))
+                  result]
+                 [(and (not in-link)
+                       (eq? link-mode 'redirects)
+                       (link-exists? f))
+                  (loop f (link->dest f) result)]
+                 [(directory-exists? f)
+                  (for/fold ([result result]) ([s (filter use-src-dir? (directory-list f))])
+                    (loop (build-path f s)
+                          (and in-link (build-path in-link s))
+                          result))]
+                 [(file-exists? f)
+                  (define key (in-sub f))
+                  (define old (hash-ref remote-content key #f))
+                  (define call-with-file-stream (if in-link
+                                                    (lambda (f p) (p (open-input-bytes #"")))
+                                                    (and make-call-with-file-stream
+                                                         (make-call-with-file-stream key f))))
+                  (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
+                  (cond
+                   [(equal? old new)
+                    (void)]
+                   [upload?
+                    (define content-type (and (not in-link)
+                                              (or (and get-content-type
+                                                       (get-content-type key f))
+                                                  (path->content-type key))))
+                    (define content-encoding (and (not in-link)
+                                                  get-content-encoding
+                                                  (get-content-encoding key f)))
+                    (define task-id (get-task-id))
+                    (log-info (format "Upload: ~a as: ~a~a~a"
+                                      (format-to f key)
+                                      (if in-link 'redirect content-type)
+                                      (if content-encoding (format " ~a" content-encoding) "")
+                                      (task-id-str task-id)))
+                    (unless dry-run?
+                      (task!
+                       task-id
+                       (lambda ()
+                         (define s
+                           ((if (and (not in-link)
+                                     ((file-size f) . > . MULTIPART-THRESHOLD))
+                                multipart-put-file-via-bytes
+                                put-file-via-bytes)
+                            (b+p f)
+                            f
+                            call-with-file-stream
+                            (or content-type "application/octet-stream")
+                            (cond
+                             [in-link
+                              (define rel-path
+                                (string-append
+                                 "/"
+                                 (encode-path (string-join (map path-element->string
+                                                                (explode-path
+                                                                 (if sub
+                                                                     (build-path sub in-link)
+                                                                     in-link)))
+                                                           "/"))))
+                              (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
+                             [content-encoding
+                              (hash-set upload-props 'Content-Encoding content-encoding)]
+                             [else upload-props])))
+                         (when s
+                           (failure "put" f s)))))]
+                   [old
+                    (download "changed" key f)])
+                  (set-add result key)]
+                 [else
+                  (error 's3-sync "path error or broken link\n  path: ~e" f)])))))
 
       (sync-tasks)
 
@@ -402,28 +455,13 @@
               (delete-file (build-path src-dir f))))))
 
       (when (and upload? (eq? link-mode 'redirect))
-        (define abs-src-dir (path->complete-path src-dir))
         (define link-content
           (parameterize ([current-directory src-dir])
             (for/list ([f (in-directory #f (lambda (dir)
                                              (not (link-exists? dir))))]
                        #:when (and (included? (in-sub f))
                                    (link-exists? f)))
-              (define raw-dest (resolve-path f))
-              (define dest (path->complete-path 
-                            raw-dest
-                            (let-values ([(base name dir?) (split-path f)])
-                              (build-path abs-src-dir base))))
-              (define rel-dest (find-relative-path (simplify-path abs-src-dir #f)
-                                                   (simplify-path dest #f)))
-              (unless (and (relative-path? rel-dest)
-                           (not (memq 'up (explode-path rel-dest))))
-                (error 's3-sync
-                       (~a "link does not stay within directory\n"
-                           "  source path: ~a\n"
-                           "  destination path: ~a")
-                       f
-                       raw-dest))
+              (define rel-dest (link->dest f))
               (cons (path->string (if sub (build-path sub f) f))
                     (path->string (if sub (build-path sub rel-dest) rel-dest))))))
         (unless (null? link-content)
@@ -608,8 +646,10 @@
      #:once-any
      [("--error-links") "Treat soft links as errors (the default)"
       (set! link-mode 'error)]
-     [("--redirect-links") "Treat soft links as redirection rules"
+     [("--redirect-links") "Treat soft links as a table of redirection rules"
       (set! link-mode 'redirect)]
+     [("--redirects-links") "Treat soft links as individual redirections"
+      (set! link-mode 'redirects)]
      [("--follow-links") "Follow soft links"
       (set! link-mode 'follow)]
      [("--ignore-links") "Ignore soft links"

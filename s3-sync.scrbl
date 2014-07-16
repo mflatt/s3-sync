@@ -80,7 +80,10 @@ The following options (supply them after @exec{s3-sync} and before
        default treatment of soft links.}
  @item{@DFlag{follow-links} --- follow soft links.}
  @item{@DFlag{redirect-links} --- treat soft links as redirection
-       rules to be installed for @nonterm{bucket} as a web site.}
+       rules to be installed for @nonterm{bucket} as a web site (upload only).}
+ @item{@DFlag{redirects-links} --- treat soft links as individual
+       redirections to be installed as metadata on a @nonterm{bucket}'s
+       object, while the object itself is made empty (upload only).}
  @item{@DFlag{ignore-links} --- ignore soft links.}
 
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
@@ -124,7 +127,7 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                                           #f]
                   [#:acl acl (or/c #f string?) #f]
                   [#:reduced-redundancy? reduced-redundancy? any/c #f]
-                  [#:link-mode link-mode (or/c 'error 'follow 'redirect 'ignore) 'error]
+                  [#:link-mode link-mode (or/c 'error 'follow 'redirect 'redirects 'ignore) 'error]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
@@ -204,8 +207,12 @@ in @racket[local-dir]:
  @item{@racket['follow] --- follows soft links (i.e., treat it as a
        file or directory)}
 
- @item{@racket['redirect] --- treat it as redirection rule to be
-       installed for @racket[bucket] as a web site on upload}
+ @item{@racket['redirect] --- treat it as a redirection rule to be
+       installed for @racket[s3-bucket] as a web site on upload}
+
+ @item{@racket['redirects] --- treat it as a redirection rule to be
+       installed for @racket[s3-bucket]'s object as metadata on upload,
+       while the object itself is uploaded as empty}
 
  @item{@racket['ignore] --- ignore}
 
@@ -214,7 +221,9 @@ in @racket[local-dir]:
 The @racket[log-info] and @racket[raise-error] arguments determine how
 progress is logged and errors are reported. The default
 @racket[log-info] function logs the given string at the @racket['info]
-level to a logger whose name is @racket['s3-sync].}
+level to a logger whose name is @racket['s3-sync].
+
+@history[#:changed "1.2" @elem{Added @racket['redirects] mode.}]}
 
 @section{S3 gzip Support}
 
