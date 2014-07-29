@@ -334,7 +334,8 @@
                  [(not f)
                   (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
                     (loop s #f result))]
-                 [(not (and (included? (in-sub f))
+                 [(not (and (or (included? (in-sub f))
+                                (directory-exists? f))
                             (case link-mode
                               [(follow redirects) #t]
                               [(redirect ignore) (not (link-exists? f))]
