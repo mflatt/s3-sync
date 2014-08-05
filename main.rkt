@@ -76,6 +76,7 @@
                  #:get-content-type [get-content-type #f]
                  #:get-content-encoding [get-content-encoding #f]
                  #:acl [acl #f]
+                 #:upload-metadata [upload-metadata (hash)]
                  #:reduced-redundancy? [reduced-redundancy? #f]
                  #:link-mode [link-mode 'error]
                  #:log [log-info (lambda (s)
@@ -123,7 +124,7 @@
       (define download? (not upload?))
       
       (define upload-props
-        (let* ([ht (hash)]
+        (let* ([ht upload-metadata]
                [ht (if reduced-redundancy?
                        (hash-set ht 'x-amz-storage-class "REDUCED_REDUNDANCY")
                        ht)]
@@ -586,7 +587,8 @@
 
 
 (module+ main
-  (require "gzip.rkt")
+  (require "web-config.rkt"
+           "gzip.rkt")
 
   (define s3-hostname "s3.amazonaws.com")
 
@@ -600,6 +602,7 @@
   (define gzip-rx #f)
   (define gzip-size -1)
   (define s3-acl #f)
+  (define upload-metadata (hash))
   (define reduced-redundancy? #f)
 
   (define (check-regexp rx)
@@ -642,6 +645,13 @@
       (unless (exact-nonnegative-integer? n)
         (raise-user-error 's3-sync "bad number: ~a" bytes))
       (set! gzip-size n)]
+     #:multi
+     [("++upload-metadata") name value "Add <name>: <value> to metadata"
+      (set! upload-metadata
+            (hash-set upload-metadata
+                      (string->symbol name)
+                      value))]
+     #:once-each
      [("--s3-hostname") hostname "Set S3 hostname (instead of `s3.amazon.com`)"
       (set! s3-hostname hostname)]
      #:once-any
@@ -659,8 +669,13 @@
      [("--web") "Set defaults suitable for web sites"
       (unless s3-acl (set! s3-acl "public-read"))
       (set! reduced-redundancy? #t)
-      (unless gzip-rx (set! gzip-rx #rx"[.](html|css|js)$"))
-      (when (= -1 gzip-size) (set! gzip-size (* 1 1024)))]
+      (unless gzip-rx (set! gzip-rx web-gzip-rx))
+      (when (= -1 gzip-size) (set! gzip-size web-gzip-min-size))
+      (set! upload-metadata
+            (for/fold ([ht upload-metadata]) ([(k v) (in-hash web-upload-metadata)])
+              (if (hash-ref ht k #f)
+                  ht
+                  (hash-set ht k v))))]
      #:args
      (src dest)
      (values src dest)))
@@ -710,6 +725,7 @@
            #:shallow? shallow?
            #:upload? upload?
            #:acl s3-acl
+           #:upload-metadata upload-metadata
            #:reduced-redundancy? reduced-redundancy?
            #:error raise-user-error
            #:include include-rx

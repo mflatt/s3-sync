@@ -1,6 +1,7 @@
 #lang racket
 (require s3-sync
          s3-sync/gzip
+         s3-sync/web
          aws/keys
          aws/s3
          net/head
@@ -103,8 +104,12 @@
   (create-file "x_test" "No one pulls you")
   (create-file "y_test" "Out from your hole")
   (set! plan-count 0)
-  (s3-sync dir bucket #f #:log count-planned #:jobs jobs)
+  (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+           #:upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
   (check-equal? plan-count 2)
+
+  (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
+  (check-false (regexp-match? #rx"Cache-Control: max-age=0" (head (~a bucket/ "z_test"))))
 
   (step "Download removed files")
   (remove-file "x_test")
@@ -249,6 +254,34 @@
 
 (go 1)
 (go 10)
+
+(define (web-go)
+  (printf "=== Testing web upload ==\n")
+
+  (step "Initialize test bucket to empty")
+  (s3-sync dir bucket #f #:delete? #t)
+  (check-equal? (ls bucket/) '())
+
+  (create-file "x_test" "Wish I was ocean size")
+  (create-file "y_test" "They cannot move you")
+  (create-file "z_test" "No one tries")
+
+  (step "Dry run of upload")
+  (s3-web-sync dir bucket #f #:dry-run? #t)
+  (check-equal? (ls bucket/) '())
+
+  (step "Upload three files")
+  (s3-web-sync dir bucket #f)
+  (check-equal? (ls bucket/) '("x_test" "y_test" "z_test"))
+
+  (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
+  (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "z_test")))
+
+  (step "Empty local directory")
+  (for ([f (in-list (directory-list dir #:build? #t))])
+    (delete-directory/files f)))
+
+(web-go)
 
 (step "Clean up local directory")
 (delete-directory/files dir)

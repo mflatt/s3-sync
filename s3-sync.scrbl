@@ -4,6 +4,8 @@
                      racket/contract/base
                      s3-sync
                      s3-sync/gzip
+                     s3-sync/web
+                     s3-sync/web-config
                      aws/s3
                      aws/keys))
 
@@ -73,6 +75,12 @@ The following options (supply them after @exec{s3-sync} and before
        @DFlag{gzip}, compress only files that are at least
        @nonterm{bytes} in size.}
 
+ @item{@DPFlag{upload-metadata} @nonterm{name} @nonterm{value} ---
+       includes @nonterm{name} with @nonterm{value} as metadata when
+       uploading (without updating metadata for any file that is not
+       uploaded).  This flag can be specified multiple times to add
+       multiple metadata entries.}
+
  @item{@DFlag{s3-hostname} @nonterm{hostname} --- set the S3 hostname
        to @nonterm{hostname} instead of @tt{s3.amazon.com}.}
 
@@ -87,8 +95,9 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{ignore-links} --- ignore soft links.}
 
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
-       redundancy, and compression for @filepath{.html}, @filepath{.css},
-       and @filepath{.js} files that are 1K or larger.}
+       redundancy, compression for @filepath{.html}, @filepath{.css},
+       and @filepath{.js} files that are 1K or larger, and
+       @exec{Content-Cache} @exec{"max-age=0, no-cache"} metadata.}
 
 ]
 
@@ -127,6 +136,9 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                                           #f]
                   [#:acl acl (or/c #f string?) #f]
                   [#:reduced-redundancy? reduced-redundancy? any/c #f]
+                  [#:upload-metadata upload-metadata (and/c (hash/c symbol? string?)
+                                                            immutable?)
+                                     #hash()]
                   [#:link-mode link-mode (or/c 'error 'follow 'redirect 'redirects 'ignore) 'error]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
@@ -189,13 +201,22 @@ example, a bucket item whose encoding is @racket["gzip"] will be
 uncompressed on download, even though the item's hash (which is used
 to avoid unnecessary downloads) is based on the encoded content.
 
-If @racket[acl] is not @racket[#f], then it is as the S3 access
+If @racket[acl] is not @racket[#f], then it use as the S3 access
 control list on upload. For example, supply @racket["public-read"] to
-make items public for reading.
+make items public for reading. More specifically, if @racket[acl] is
+not @racket[#f], then @racket['x-amz-acl] is set to @racket[acl] in
+@racket[upload-metadata].
 
 If @racket[reduced-redundancy?] is true, then items are uploaded to S3
 with reduced-redundancy storage (which costs less, so it is suitable
-for files that are backed up elsewhere).
+for files that are backed up elsewhere).  More specifically, if
+@racket[reduced-redundancy] is true, then
+@racket['x-amz-storage-class] is set to @racket["REDUCED_REDUNDANCY"]
+in @racket[upload-metadata].
+
+The @racket[upload-metadata] hash table provides metadata to include
+with any file upload (and only to files that are otherwise determined
+to need uploading).
 
 The @racket[link-mode] argument determines the treatment of soft links
 in @racket[local-dir]:
@@ -223,9 +244,12 @@ progress is logged and errors are reported. The default
 @racket[log-info] function logs the given string at the @racket['info]
 level to a logger whose name is @racket['s3-sync].
 
-@history[#:changed "1.2" @elem{Added @racket['redirects] mode.}]}
+@history[#:changed "1.2" @elem{Added @racket['redirects] mode.}
+         #:changed "1.3" @elem{Added the @racket[upload-metadata] argument.}]}
 
-@section{S3 gzip Support}
+
+@; ------------------------------------------------------------
+@section{S3 @exec{gzip} Support}
 
 @defmodule[s3-sync/gzip]
 
@@ -241,3 +265,64 @@ Returns values that are suitable as the
 @racket[#:get-content-encoding] arguments to @racket[s3-sync] to
 compress items whose name within the bucket matches @racket[pattern]
 and whose local file size is at least @racket[min-size] bytes.}
+
+@; ------------------------------------------------------------
+@section{S3 Web Page Support}
+
+@defmodule[s3-sync/web]
+
+@history[#:added "1.3"]
+
+@defproc[(s3-web-sync ...) void?]{
+
+Accepts the same arguments as @racket[s3-sync], but adapts the
+defaults to be suitable for web-page uploads:
+
+@itemlist[
+
+ @item{@racket[#:acl] --- defaults to @racket[web-acl]}
+ @item{@racket[#:reduced-redundancy?] --- defaults to @racket[web-reduced-redundancy?]}
+ @item{@racket[#:upload-metadata] --- defaults to @racket[web-upload-metadata]}
+ @item{@racket[#:make-call-with-input-file] --- defaults to 
+               a @exec{gzip} of files that match @racket[web-gzip-rx]
+               and @racket[web-gzip-min-size]}
+ @item{@racket[#:get-content-encoding] --- defaults to 
+               a @exec{gzip} of files that match @racket[web-gzip-rx]
+               and @racket[web-gzip-min-size]}
+
+]}
+
+@; ------------------------------------------------------------
+@section{S3 Web Page Configuration}
+
+@defmodule[s3-sync/web-config]
+
+@history[#:added "1.3"]
+
+@defthing[web-acl string?]{
+
+The default access control list for web content, currently @racket["public-read"].}
+
+
+@defthing[web-reduced-redundancy? boolean?]{
+
+The default storage mode for web content, currently @racket[#t].}
+
+
+@defthing[web-upload-metadata (and/c (hash/c symbol? string?)
+                                     immutable?)]{
+
+Default metadata for web content, currently @racket[(hash
+'Cache-Control "max-age=0, no-cache")].}
+
+
+@defthing[web-gzip-rx regexp?]{
+
+Default regexp for paths to be @exec{gzip}ped, currently
+@racket[#rx"[.](html|css|js)$"].}
+
+
+@defthing[web-gzip-min-size exact-nonnegative-integer?]{
+
+Default minimum size for files to be @exec{gzip}ped, currently
+@racket[#rx"[.](html|css|js)$"].}
