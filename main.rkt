@@ -460,7 +460,7 @@
               (log-info (format "Removing remote: ~a" key)))
             (unless dry-run?
               (define s
-                (delete-multiple bucket (map encode-path keys)))
+                (delete-multiple bucket keys))
               (unless (member (extract-http-code s) '(200 204))
                 (failure "delete" (first keys) s)))
             (loop (list-tail discards this-len) (- len this-len)))))
