@@ -195,11 +195,17 @@
                          (for/fold ([ht ht]) ([x (in-list xs)])
                            (case (car x)
                              [(Contents)
-                              (if (included? (get-name x))
-                                  (hash-set ht
-                                            (get-name x)
-                                            (get-etag x))
-                                  ht)]
+                              (define name (get-name x))
+                              (cond
+                               [(regexp-match? #rx"/$" name)
+                                ;; ignore any element that ends with "/",
+                                ;; because we can't represent it on the filesystem
+                                ht]
+                               [(included? name)
+                                (hash-set ht name (get-etag x))]
+                               [else
+                                ;; not included
+                                ht])]
                              [(CommonPrefixes)
                               (define prefix (get-prefix x))
                               (define prefix-no-/
@@ -208,6 +214,18 @@
                        ht)
               ht)))
       (log-info "... got it.")
+
+      (unless upload?
+        ;; Double-check that the remote content does not imply
+        ;; a file and directory with the same name:
+        (for ([k (in-hash-keys remote-content)])
+          (let loop ([l (cdr (reverse (string-split k "/")))])
+            (define p (string-join l "/"))
+            (when (hash-ref remote-content p #f)
+              (error 's3-sync
+                     (~a "remote path corresponds to both a file and a directory\n"
+                         "  path: ~a")
+                     p)))))
 
       (define (failure what f s)
         (error 's3-sync (~a "~a failed\n"
@@ -418,7 +436,6 @@
         ;; Get list of needed files, then sort, then download:
         (define needed
           (for/list ([key (in-hash-keys remote-content)]
-                     #:unless (regexp-match? #rx"/$" key)
                      #:unless (set-member? local-content key))
             key))
         (unless (null? needed)

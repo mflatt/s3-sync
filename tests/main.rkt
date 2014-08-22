@@ -250,6 +250,32 @@
 
   (step "Empty local directory")
   (for ([f (in-list (directory-list dir #:build? #t))])
+    (delete-directory/files f))
+
+  (step "Upload file with same name as \"directory\"")
+  (create-file "nested" "All action")
+  (s3-sync dir bucket #f #:upload? #t #:jobs jobs)
+  (check-equal? (ls bucket/)
+                '("nested"
+                  "nested/a_test" "nested/b_test" 
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
+  (check-exn (lambda (exn)
+               (and (exn:fail? exn)
+                    (regexp-match #rx"both a file and a directory"
+                                  (exn-message exn))))
+             (lambda ()
+               (s3-sync dir bucket #f #:upload? #f #:jobs jobs)))
+  (check-equal? (file-list) '("nested"))
+
+  (step "Download only immediate files (so no directory conflict)")
+  (create-file "nested" "No talking")
+  (s3-sync dir bucket #f #:upload? #f #:exclude #rx"/" #:jobs jobs)
+  (check-equal? (file-list) '("nested" "x_test" "y_test" "z_test"))
+  (check-equal? (file-content "nested") "All action")
+
+  (step "Empty local directory")
+  (for ([f (in-list (directory-list dir #:build? #t))])
     (delete-directory/files f)))
 
 (go 1)

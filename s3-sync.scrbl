@@ -11,7 +11,7 @@
 
 @title{AWS S3 Synchronization}
 
-Synchronize an S3 bucket and a filesystem directory using
+@deftech{Synchronize} an S3 bucket and a filesystem directory using
 
 @commandline{raco s3-sync @nonterm{src} @nonterm{dest}}
 
@@ -19,7 +19,11 @@ where either @nonterm{src} or @nonterm{dest} should start with
 @exec{s3://} to identify a bucket and prefix, while the other is a
 directory path in the local filesystem. Naturally, a @litchar{/}
 within a bucket item's name corresponds to a directory separator in
-the local filesystem.
+the local filesystem.@margin-note{A bucket item is ignored if its name
+ends in @litchar{/}. A bucket can contain an item whose name plus
+@litchar{/} is a prefix for other bucket items, in which case
+attempting to synchronize both from the bucket will produce an error,
+since the name cannot be used for both a file and a directory.}
 
 For example, to upload the content of @nonterm{src-dir} with a prefix
 @nonterm{dest-path} within @nonterm{bucket}, use
@@ -144,7 +148,7 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
 
-Synchronizes the content of @racket[local-dir] and @racket[s3-path]
+@tech{Synchronizes} the content of @racket[local-dir] and @racket[s3-path]
 within @racket[s3-bucket], where @racket[s3-path] can be @racket[#f]
 to indicate an upload to the bucket with no prefix path. If
 @racket[upload?] is true, @racket[s3-bucket] is changed to have the
