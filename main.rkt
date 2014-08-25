@@ -23,8 +23,8 @@
 
 (define (path->content-type p)
   (case (filename-extension p)
-    [(#"html") "text/html"]
-    [(#"txt") "text/plain"]
+    [(#"html") "text/html; charset=utf-8"]
+    [(#"txt") "text/plain; charset=utf-8"]
     [(#"png") "image/png"]
     [(#"gif") "image/gif"]
     [(#"svg") "image/svg+xml"]
