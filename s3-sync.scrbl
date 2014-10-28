@@ -16,10 +16,12 @@
 @commandline{raco s3-sync @nonterm{src} @nonterm{dest}}
 
 where either @nonterm{src} or @nonterm{dest} should start with
-@exec{s3://} to identify a bucket and prefix, while the other is a
-directory path in the local filesystem. Naturally, a @litchar{/}
-within a bucket item's name corresponds to a directory separator in
-the local filesystem.@margin-note{A bucket item is ignored if its name
+@exec{s3://} to identify a bucket and item name or prefix, while the
+other is a path in the local filesystem to a file or
+directory. Naturally, a @litchar{/} within a bucket item's name
+corresponds to a directory separator in the local filesystem, and a
+trailing @litchar{/} syntactically indicates a prefix (as opposed to a
+complete item name).@margin-note*{A bucket item is ignored if its name
 ends in @litchar{/}. A bucket can contain an item whose name plus
 @litchar{/} is a prefix for other bucket items, in which case
 attempting to synchronize both from the bucket will produce an error,
@@ -34,6 +36,13 @@ To download the items with prefix @nonterm{src-path} within
 @nonterm{bucket} to @nonterm{dest-dir}, use
 
 @commandline{raco s3-sync s3://@nonterm{bucket}/@nonterm{src-path} @nonterm{dest-dir}}
+
+If @nonterm{src} refers to a directory or prefix (either syntactically
+or as determined by consulting the filesystem or bucket),
+@nonterm{dest} cannot refer to a file or bucket item. If
+@nonterm{dest} refers to directory or prefix while @nonterm{src}
+refers to a file or item, the @nonterm{src} file or item name is
+implicitly added to the @nonterm{dest} directory or prefix.
 
 The following options (supply them after @exec{s3-sync} and before
 @nonterm{src}) are supported:
@@ -113,7 +122,7 @@ The @racketmodname[s3-sync] library uses @racketmodname[aws/s3], so
 use @racket[ensure-have-keys] and @racket[s3-host] before calling
 @racket[s3-sync].
 
-@defproc[(s3-sync [local-dir path-string?]
+@defproc[(s3-sync [local-path path-string?]
                   [s3-bucket string?]
                   [s3-path (or/c #f string?)]
                   [#:upload? upload? any/c #t]
@@ -148,21 +157,39 @@ use @racket[ensure-have-keys] and @racket[s3-host] before calling
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
 
-@tech{Synchronizes} the content of @racket[local-dir] and @racket[s3-path]
-within @racket[s3-bucket], where @racket[s3-path] can be @racket[#f]
-to indicate an upload to the bucket with no prefix path. If
-@racket[upload?] is true, @racket[s3-bucket] is changed to have the
-content of @racket[local-dir], otherwise @racket[local-dir] is changed
-to have the content of @racket[s3-bucket].
+@tech{Synchronizes} the content of @racket[local-path] and
+@racket[s3-path] within @racket[s3-bucket], where @racket[s3-path] can
+be @racket[#f] to indicate an upload to the bucket with no prefix
+path. If @racket[upload?] is true, @racket[s3-bucket] at
+@racket[s3-path] is changed to have the content of
+@racket[local-path], otherwise @racket[local-path] is changed to have
+the content of @racket[s3-bucket] at @racket[s3-path].
+
+Typically, @racket[local-path] refers to a directory and
+@racket[s3-path] refers to a prefix for bucket item names.
+If @racket[local-path] refers to a file and @racket[upload?] is true,
+then a single file is synchronized to @racket[s3-bucket] at
+@racket[s3-path]. In that case, if @racket[s3-path] ends with a
+@litchar{/} or it is already used as a prefix for bucket items, then
+the file name of @racket[local-path] is added to @racket[s3-path] to
+form the uploaded item's name; otherwise, @racket[s3-path] names the
+uploaded item. If @racket[upload?] is @racket[#f] and @racket[s3-path]
+is an item name (and not a prefix on other item names), then a single
+bucket item is downloaded to @racket[local-path]; if
+@racket[local-path] refers to a directory, then the portion of
+@racket[s3-path] after the last @litchar{/} is used as the downloaded
+file name.
 
 If @racket[shallow?] is true, then in download mode, bucket items are
 downloaded only when they correspond to directories that exist already
-in @racket[local-dir]. In both download and upload modes, a true value
-of @racket[shallow?] causes the state of @racket[s3-bucket] to be
-queried in a directory-like way, exploring only relevant directories;
-that exploration can be faster than querying the full content of
-@racket[s3-bucket] if it contains many more nested items (with the
-prefix @racket[s3-path]) than files within @racket[local-dir].
+in @racket[local-path] (which is useful when @racket[local-path]
+refers to a directory). In both download and upload modes, a true
+value of @racket[shallow?] causes the state of @racket[s3-bucket] to
+be queried in a directory-like way, exploring only relevant
+directories; that exploration can be faster than querying the full
+content of @racket[s3-bucket] if it contains many more nested items
+(with the prefix @racket[s3-path]) than files within
+@racket[local-path].
 
 If @racket[dry-run?] is true, then actions needed for synchronization
 are reported via @racket[log], but no uploads, downloads, deletions,
@@ -223,7 +250,7 @@ with any file upload (and only to files that are otherwise determined
 to need uploading).
 
 The @racket[link-mode] argument determines the treatment of soft links
-in @racket[local-dir]:
+in @racket[local-path]:
 
 @itemlist[
 
@@ -249,7 +276,9 @@ progress is logged and errors are reported. The default
 level to a logger whose name is @racket['s3-sync].
 
 @history[#:changed "1.2" @elem{Added @racket['redirects] mode.}
-         #:changed "1.3" @elem{Added the @racket[upload-metadata] argument.}]}
+         #:changed "1.3" @elem{Added the @racket[upload-metadata] argument.}
+         #:changed "1.4" @elem{Added support for a single file as @racket[local-path]
+                               and a bucket item name as @racket[s3-path].}]}
 
 
 @; ------------------------------------------------------------

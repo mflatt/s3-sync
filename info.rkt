@@ -12,7 +12,7 @@
 
 (define scribblings '(("s3-sync.scrbl" () (tool))))
 
-(define version "1.3")
+(define version "1.4")
 
 (define raco-commands
   (list (list "s3-sync"

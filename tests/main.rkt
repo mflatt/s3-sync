@@ -79,7 +79,7 @@
 
   (define plan-count 0)
   (define (count-planned s)
-    (when (regexp-match? #rx"[a-z]_test" s)
+    (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z]_test" s)
       (set! plan-count (add1 plan-count))))
 
   (step "Dry run of upload")
@@ -108,6 +108,28 @@
            #:upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
   (check-equal? plan-count 2)
 
+  (step "Download and rename individual file")
+  (set! plan-count 0)
+  (s3-sync (build-path dir "like_x_test") bucket "x_test"
+           #:upload? #f #:log count-planned #:jobs jobs)
+  (check-equal? plan-count 1)
+  (check-equal? (file-content "x_test") (file-content "like_x_test"))
+  (remove-file "like_x_test")
+  
+  (step "Upload and rename individual file")
+  (set! plan-count 0)
+  (s3-sync (build-path dir "y_test") bucket "like_y_test"
+           #:log count-planned #:jobs jobs)
+  (check-equal? plan-count 1)
+  (check-equal? (ls bucket/) '("like_y_test" "x_test" "y_test" "z_test"))
+
+  (step "Download individual file to directory")
+  (set! plan-count 0)
+  (s3-sync dir bucket "like_y_test"
+           #:upload? #f #:log count-planned #:jobs jobs)
+  (check-equal? plan-count 1)
+  (check-equal? (file-content "y_test") (file-content "like_y_test"))
+
   (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
   (check-false (regexp-match? #rx"Cache-Control: max-age=0" (head (~a bucket/ "z_test"))))
 
@@ -120,6 +142,7 @@
   (check-equal? (file-content "x_test") "No one pulls you")
   (check-equal? (file-content "y_test") "Out from your hole")
   (check-equal? (file-content "z_test") "No one tries")
+  (check-equal? (file-content "like_y_test") (file-content "y_test"))
 
   (unless (eq? (system-type) 'windows)
     (step "Error on links")
@@ -134,7 +157,7 @@
     
     (step "Follow link")
     (s3-sync dir bucket #f #:jobs jobs #:link-mode 'follow)
-    (check-equal? (ls bucket/) '("also_z_test" "x_test" "y_test" "z_test"))
+    (check-equal? (ls bucket/) '("also_z_test" "like_y_test" "x_test" "y_test" "z_test"))
     (remove-file "also_z_test")
     (set! plan-count 0)
     (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
@@ -152,6 +175,7 @@
     (check-equal? plan-count 1)
     (check-equal? (file-content "also_z_test") "")
     (remove-file "also_z_test")
+    (remove-file "like_y_test")
 
     (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
     (check-equal? (ls bucket/) '("x_test" "y_test" "z_test"))
@@ -173,14 +197,53 @@
   (set! plan-count 0)
   (s3-sync (build-path dir "sub") bucket "nested" #:log count-planned #:jobs jobs)
   (check-equal? plan-count 2)
-  (check-equal? (ls bucket/) '("nested/a_test" "nested/b_test" "x_test" "y_test" "z_test"))
+  (check-equal? (ls bucket/) '("nested/a_test" "nested/b_test"
+                               "x_test" "y_test" "z_test"))
 
+  (step "Upload file to specified prefix")
+  (set! plan-count 0)
+  (s3-sync (build-path dir "x_test") bucket "nested" #:log count-planned #:jobs jobs)
+  (check-equal? plan-count 1)
+  (check-equal? (ls bucket/) '("nested/a_test" "nested/b_test" "nested/x_test"
+                               "x_test" "y_test" "z_test"))
+
+  (step "Cannot upload directory to file name")
+  (check-exn (lambda (exn)
+               (and (exn:fail? exn)
+                    (regexp-match #rx"mismatch between remote and local"
+                                  (exn-message exn))))
+             (lambda ()
+               (s3-sync dir bucket "x_test" #:jobs jobs)))
+  (check-exn (lambda (exn)
+               (and (exn:fail? exn)
+                    (regexp-match #rx"local path not found"
+                                  (exn-message exn))))
+             (lambda ()
+               (s3-sync (path->directory-path (build-path dir "x_test"))
+                        bucket "x_test" #:jobs jobs)))
+
+  (step "Cannot download directory to file name")
+  (check-exn (lambda (exn)
+               (and (exn:fail? exn)
+                    (regexp-match #rx"mismatch between remote and local"
+                                  (exn-message exn))))
+             (lambda ()
+               (s3-sync (build-path dir "x_test") bucket "nested" #:upload? #f #:jobs jobs)))
+  (check-exn (lambda (exn)
+               (and (exn:fail? exn)
+                    (regexp-match #rx"was a directory, found a file"
+                                  (exn-message exn))))
+             (lambda ()
+               (s3-sync (build-path dir "x_test") bucket "x_test/" #:upload? #f #:jobs jobs)))
+    
   (step "Download from newly nested path")
   (set! plan-count 0)
   (s3-sync dir bucket "nested" #:upload? #f #:log count-planned #:jobs jobs)
   (check-equal? plan-count 2)
   (check-equal? (file-list)
-                '("a_test" "b_test" "sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("a_test" "b_test"
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
   (remove-file "a_test")
   (remove-file "b_test")
 
@@ -189,34 +252,44 @@
   (s3-sync dir bucket #f #:shallow? #t #:upload? #f #:log count-planned #:jobs jobs)
   (check-equal? plan-count 0)
   (check-equal? (file-list)
-                '("sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
 
   (step "Download to get newly nested path")
   (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
-  (check-equal? plan-count 2)
+  (check-equal? plan-count 3)
   (check-equal? (file-list)
-                '("nested/a_test" "nested/b_test" "sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("nested/a_test" "nested/b_test" "nested/x_test"
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
 
   (step "Try that again")
   (remove-file "nested/a_test")
   (remove-file "nested/b_test")
   (check-equal? (file-list)
-                '("sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("nested/x_test"
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
   ;; "nested" directory still exists...
   (set! plan-count 0)
   (s3-sync dir bucket #f #:shallow? #t #:upload? #f #:log count-planned #:jobs jobs)
   (check-equal? plan-count 2)
   (check-equal? (file-list)
-                '("nested/a_test" "nested/b_test" "sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("nested/a_test" "nested/b_test" "nested/x_test"
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
 
   (step "Upload to add subpath")
   (check-equal? (ls bucket/)
-                '("nested/a_test" "nested/b_test" "x_test" "y_test" "z_test"))
+                '("nested/a_test" "nested/b_test" "nested/x_test"
+                  "x_test" "y_test" "z_test"))
   (set! plan-count 0)
   (s3-sync dir bucket #f #:shallow? #t #:log count-planned #:jobs jobs)
   (check-equal? plan-count 2)
   (check-equal? (ls bucket/)
-                '("nested/a_test" "nested/b_test" "sub/a_test" "sub/b_test" "x_test" "y_test" "z_test"))
+                '("nested/a_test" "nested/b_test" "nested/x_test"
+                  "sub/a_test" "sub/b_test"
+                  "x_test" "y_test" "z_test"))
 
   (step "Nothing new to upload")
   (set! plan-count 0)
@@ -257,7 +330,7 @@
   (s3-sync dir bucket #f #:upload? #t #:jobs jobs)
   (check-equal? (ls bucket/)
                 '("nested"
-                  "nested/a_test" "nested/b_test" 
+                  "nested/a_test" "nested/b_test" "nested/x_test" 
                   "sub/a_test" "sub/b_test"
                   "x_test" "y_test" "z_test"))
   (check-exn (lambda (exn)

@@ -63,7 +63,7 @@
    [else
     (call-with-file-stream f md5)]))
 
-(define (s3-sync src-dir bucket given-sub
+(define (s3-sync src bucket given-sub
                  #:upload? [upload? #t]
                  #:error [error error]
                  #:dry-run? [dry-run? #f]
@@ -81,6 +81,27 @@
                  #:link-mode [link-mode 'error]
                  #:log [log-info (lambda (s)
                                    (log-s3-sync-info s))])
+  
+  (define sub-is-dir? (or (not given-sub)
+                          (regexp-match? #rx"/$" given-sub)))
+  
+  (when upload?
+    (unless (or (file-exists? src)
+                (directory-exists? src)
+                (link-exists? src))
+      (error 's3-sync (~a "given local path not found for upload\n"
+                          "  path: ~a")
+             src)))
+  
+  (define src-kind
+    (let-values ([(base name dir?) (split-path src)])
+      (cond
+       [dir? 'directory]
+       [(directory-exists? src) 'directory]
+       [(file-exists? src) 'file]
+       [upload?
+        (error 's3-sync "no such file or directory to upload\n  path: ~a" src)]
+       [else #f])))
 
   (define task-sema (make-semaphore jobs))
   (define tasks (make-hash))
@@ -107,7 +128,7 @@
                                 (raise exn))])
     (parameterize ([current-pool-timeout 10]) ; from http/request (version 0.2)
 
-      (define sub
+      (define clean-sub
         ;; Clean up empty `sub' and/or trailing "/"
         (and given-sub
              (if (equal? given-sub "")
@@ -115,8 +136,10 @@
                  (regexp-replace #rx"/+$" given-sub ""))))
 
       (log-info (let ([remote (~a bucket
-                                  (if sub (~a "/" (encode-path sub)) ""))]
-                      [local src-dir])
+                                  (if clean-sub
+                                      (~a "/" (encode-path clean-sub))
+                                      ""))]
+                      [local src])
                   (format "Syncing: ~a from: ~a"
                           (if upload? remote local)
                           (if upload? local remote))))
@@ -143,7 +166,7 @@
                (or (not exclude-rx)
                    (not (regexp-match? exclude-rx s))))))
 
-      (define (in-sub f)
+      (define (in-sub f [sub sub])
         ;; relies on item names matching path syntax:
         (path->string (if sub (build-path sub f) f)))
 
@@ -166,13 +189,13 @@
 
       (define local-directories
         (and shallow?
-             (if (directory-exists? src-dir)
-                 (parameterize ([current-directory src-dir])
+             (if (eq? src-kind 'directory)
+                 (parameterize ([current-directory src])
                    (set-add
                     (for/set ([f (in-directory #f use-src-dir?)]
                               #:when (and (directory-exists? f)
                                           (use-src-dir? f)))
-                      (in-sub f))
+                      (in-sub f clean-sub))
                     #f))
                  (set))))
 
@@ -183,37 +206,131 @@
         (caddr (assq 'Prefix (cddr x))))
       (define (get-etag x)
         (cadddr (assq 'ETag (cddr x))))
-      (define remote-content
-        (let loop ([sub sub] [ht (hash)])
+      (define (make-ls-handler handle-null included? handle-prefix empty-hash)
+        (lambda (ht xs)
+          (cond
+           [(null? xs)
+            (handle-null)]
+           [else
+            (for/fold ([ht (or ht empty-hash)]) ([x (in-list xs)])
+              (case (car x)
+                [(Contents)
+                 (define name (get-name x))
+                 (cond
+                  [(regexp-match? #rx"/$" name)
+                   ;; ignore any element that ends with "/",
+                   ;; because we can't represent it on the filesystem
+                   ht]
+                  [(included? name)
+                   (hash-set (or ht (hash)) name (get-etag x))]
+                  [else
+                   ;; not included
+                   ht])]
+                [(CommonPrefixes)
+                 (define prefix (get-prefix x))
+                 (define prefix-no-/
+                   (substring prefix 0 (sub1 (string-length prefix))))
+                 (handle-prefix prefix-no-/ ht)]))])))
+      (define remote-content-as-directory
+        (let loop ([sub clean-sub] [ht #f] [initial? #t])
           (if (or (not shallow?)
+                  (not (eq? src-kind 'directory))
                   (set-member? local-directories sub))
               (ls/proc (~a bucket "/" (if sub
                                           (~a (encode-path sub) "/")
                                           ""))
                        #:delimiter (and shallow? "/")
-                       (lambda (ht xs)
-                         (for/fold ([ht ht]) ([x (in-list xs)])
-                           (case (car x)
-                             [(Contents)
-                              (define name (get-name x))
-                              (cond
-                               [(regexp-match? #rx"/$" name)
-                                ;; ignore any element that ends with "/",
-                                ;; because we can't represent it on the filesystem
-                                ht]
-                               [(included? name)
-                                (hash-set ht name (get-etag x))]
-                               [else
-                                ;; not included
-                                ht])]
-                             [(CommonPrefixes)
-                              (define prefix (get-prefix x))
-                              (define prefix-no-/
-                                (substring prefix 0 (sub1 (string-length prefix))))
-                              (loop prefix-no-/ ht)])))
+                       (make-ls-handler (lambda ()
+                                          (if (and initial? sub)
+                                              #f
+                                              (or ht (hash))))
+                                        included?
+                                        (lambda (prefix-no-/ ht)
+                                          (loop prefix-no-/ ht #f))
+                                        (hash))
                        ht)
               ht)))
+      (define-values (remote-content remote-kind)
+        (cond
+         [(not remote-content-as-directory)
+          (define remote-content-as-file
+            (and clean-sub
+                 (ls/proc (~a bucket "/" (encode-path clean-sub))
+                          #:delimiter "/"
+                          (let ([sub-name (last (string-split clean-sub "/"))])
+                            (make-ls-handler (lambda ()
+                                               (unless upload?
+                                                 (error 's3-sync
+                                                        (~a "remote content not found\n"
+                                                            "  remote path: ~a")
+                                                        clean-sub))
+                                               #f)
+                                             (lambda (name)
+                                               (and (equal? name sub-name)
+                                                    (included? name)))
+                                             (lambda (prefix-no-/ ht) #f)
+                                             #f))
+                          #f)))
+          (if remote-content-as-file
+              (begin
+                (when sub-is-dir?
+                  (error 's3-sync
+                         (~a "given bucket path was a directory, found a file\n"
+                             "  path: ~a\n"
+                             "  bucket: ~a")
+                         given-sub
+                         bucket))
+                ;; remote names a file:
+                (values remote-content-as-file 'file))
+              ;; no content or disposition:
+              (values (hash) (if sub-is-dir?
+                                 'directory
+                                 #f)))]
+         [else
+          (values remote-content-as-directory 'directory)]))
       (log-info "... got it.")
+      
+      (unless (or (not src-kind)
+                  (not remote-kind)
+                  (eq? src-kind remote-kind)
+                  (and upload? (eq? src-kind 'file))
+                  (and (not upload?) (eq? remote-kind 'file)))
+        (error 's3-sync
+               (~a "mismatch between remote and local types\n"
+                   "  remote type: ~a\n"
+                   "  local type: ~a\n"
+                   "  remote bucket: ~a\n"
+                   "  remote path: ~a\n"
+                   "  local path: ~a\n")
+               remote-kind
+               src-kind
+               bucket
+               (or given-sub "[none]")
+               src))
+      
+      (define-values (src-dir src-file)
+        (cond
+         [(or (eq? src-kind 'file)
+              (and (not src-kind)
+                   (eq? remote-kind 'file)))
+          (define-values (base name dir?) (split-path src))
+          (values (if (path? base) base (current-directory))
+                  name)]
+         [else
+          (values src #f)]))
+      
+      (define-values (sub sub-file)
+        (cond
+         [(or (eq? remote-kind 'file)
+              (and (not remote-kind)
+                   (eq? src-kind 'file)))
+          (define l (string-split clean-sub "/"))
+          (values (if (= 1 (length l))
+                      #f
+                      (string-join (drop-right l) "/"))
+                  (last l))]
+         [else
+          (values clean-sub #f)]))
 
       (unless upload?
         ;; Double-check that the remote content does not imply
@@ -299,7 +416,7 @@
           (task!
            task-id
            (lambda ()
-             (get/file (b+p f)
+             (get/file (b+k key)
                        f
                        #:exists 'truncate/replace)))))
 
@@ -324,11 +441,13 @@
                  raw-dest))
         rel-dest)
 
-      (define (b+p f)
-        (~a bucket "/"
-            (if sub (~a (encode-path sub) "/") "")
+      (define (f->key f)
+        (~a (if sub (~a (encode-path sub) "/") "")
             (encode-path (string-join (map path-element->string (explode-path f))
                                       "/"))))
+      
+      (define (b+k key)
+        (~a bucket "/" key))
 
       (define (key->f key)
         (define p (cond
@@ -342,93 +461,108 @@
                    [else key]))
         (apply build-path (string-split p "/")))
       
-      (define local-content
-        (if (and download?
-                 (not (directory-exists? src-dir))
-                 (not (link-exists? src-dir)))
-            (set)
-            (parameterize ([current-directory src-dir])
-              (let loop ([f #f] [in-link #f] [result (set)])
-                (cond
-                 [(not f)
-                  (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
-                    (loop s #f result))]
-                 [(not (and (or (included? (in-sub f))
-                                (directory-exists? f))
-                            (case link-mode
-                              [(follow redirects) #t]
-                              [(redirect ignore) (not (link-exists? f))]
-                              [(error) (check-link-exists f)])))
-                  result]
-                 [(and (not in-link)
-                       (eq? link-mode 'redirects)
-                       (link-exists? f))
-                  (loop f (link->dest f) result)]
-                 [(directory-exists? f)
-                  (for/fold ([result result]) ([s (filter use-src-dir? (directory-list f))])
-                    (loop (build-path f s)
-                          (and in-link (build-path in-link s))
-                          result))]
-                 [(file-exists? f)
-                  (define key (in-sub f))
-                  (define old (hash-ref remote-content key #f))
-                  (define call-with-file-stream (if in-link
-                                                    (lambda (f p) (p (open-input-bytes #"")))
-                                                    (and make-call-with-file-stream
-                                                         (make-call-with-file-stream key f))))
-                  (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
+      (define (maybe-upload f key in-link)
+        (define old (hash-ref remote-content key #f))
+        (define call-with-file-stream (if in-link
+                                          (lambda (f p) (p (open-input-bytes #"")))
+                                          (and make-call-with-file-stream
+                                               (make-call-with-file-stream key f))))
+        (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
+        (cond
+         [(equal? old new)
+          (void)]
+         [upload?
+          (define content-type (and (not in-link)
+                                    (or (and get-content-type
+                                             (get-content-type key f))
+                                        (path->content-type key))))
+          (define content-encoding (and (not in-link)
+                                        get-content-encoding
+                                        (get-content-encoding key f)))
+          (define task-id (get-task-id))
+          (log-info (format "Upload: ~a as: ~a~a~a"
+                            (format-to f key)
+                            (if in-link 'redirect content-type)
+                            (if content-encoding (format " ~a" content-encoding) "")
+                            (task-id-str task-id)))
+          (unless dry-run?
+            (task!
+             task-id
+             (lambda ()
+               (define s
+                 ((if (and (not in-link)
+                           ((file-size f) . > . MULTIPART-THRESHOLD))
+                      multipart-put-file-via-bytes
+                      put-file-via-bytes)
+                  (b+k key)
+                  f
+                  call-with-file-stream
+                  (or content-type "application/octet-stream")
                   (cond
-                   [(equal? old new)
-                    (void)]
-                   [upload?
-                    (define content-type (and (not in-link)
-                                              (or (and get-content-type
-                                                       (get-content-type key f))
-                                                  (path->content-type key))))
-                    (define content-encoding (and (not in-link)
-                                                  get-content-encoding
-                                                  (get-content-encoding key f)))
-                    (define task-id (get-task-id))
-                    (log-info (format "Upload: ~a as: ~a~a~a"
-                                      (format-to f key)
-                                      (if in-link 'redirect content-type)
-                                      (if content-encoding (format " ~a" content-encoding) "")
-                                      (task-id-str task-id)))
-                    (unless dry-run?
-                      (task!
-                       task-id
-                       (lambda ()
-                         (define s
-                           ((if (and (not in-link)
-                                     ((file-size f) . > . MULTIPART-THRESHOLD))
-                                multipart-put-file-via-bytes
-                                put-file-via-bytes)
-                            (b+p f)
-                            f
-                            call-with-file-stream
-                            (or content-type "application/octet-stream")
-                            (cond
-                             [in-link
-                              (define rel-path
-                                (string-append
-                                 "/"
-                                 (encode-path (string-join (map path-element->string
-                                                                (explode-path
-                                                                 (if sub
-                                                                     (build-path sub in-link)
-                                                                     in-link)))
-                                                           "/"))))
-                              (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
-                             [content-encoding
-                              (hash-set upload-props 'Content-Encoding content-encoding)]
-                             [else upload-props])))
-                         (when s
-                           (failure "put" f s)))))]
-                   [old
-                    (download "changed" key f)])
-                  (set-add result key)]
-                 [else
-                  (error 's3-sync "path error or broken link\n  path: ~e" f)])))))
+                   [in-link
+                    (define rel-path
+                      (string-append
+                       "/"
+                       (encode-path (string-join (map path-element->string
+                                                      (explode-path
+                                                       (if sub
+                                                           (build-path sub in-link)
+                                                           in-link)))
+                                                 "/"))))
+                    (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
+                   [content-encoding
+                    (hash-set upload-props 'Content-Encoding content-encoding)]
+                   [else upload-props])))
+               (when s
+                 (failure "put" f s)))))]
+         [old
+          (download "changed" key f)]))
+      
+      (define local-content
+        (cond
+         [src-file
+          ;; If we have both src & remote as files, report remote name
+          (define fn (build-path src-dir src-file))
+          (if (file-exists? fn)
+              (let ([key (or (and sub-file
+                                  clean-sub)
+                             (f->key src-file))])
+                (maybe-upload fn key #f)
+                (set key))
+              (set))]
+         [(and download?
+               (not (directory-exists? src-dir))
+               (not (link-exists? src-dir)))
+          (set)]
+         [else
+          (parameterize ([current-directory src-dir])
+            (let loop ([f #f] [in-link #f] [result (set)])
+              (cond
+               [(not f)
+                (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
+                  (loop s #f result))]
+               [(not (and (or (included? (in-sub f))
+                              (directory-exists? f))
+                          (case link-mode
+                            [(follow redirects) #t]
+                            [(redirect ignore) (not (link-exists? f))]
+                            [(error) (check-link-exists f)])))
+                result]
+               [(and (not in-link)
+                     (eq? link-mode 'redirects)
+                     (link-exists? f))
+                (loop f (link->dest f) result)]
+               [(directory-exists? f)
+                (for/fold ([result result]) ([s (filter use-src-dir? (directory-list f))])
+                  (loop (build-path f s)
+                        (and in-link (build-path in-link s))
+                        result))]
+               [(file-exists? f)
+                (define key (in-sub f))
+                (maybe-upload f key in-link)
+                (set-add result key)]
+               [else
+                (error 's3-sync "path error or broken link\n  path: ~e" f)])))]))
 
       (sync-tasks)
 
@@ -443,7 +577,8 @@
             (make-directory* src-dir)
             (parameterize ([current-directory src-dir])
               (for ([key (in-list needed)])
-                (download "new" key (key->f key))))
+                (download "new" key (or src-file
+                                        (key->f key)))))
             (sync-tasks))))
 
       (when (and delete? upload?)
@@ -719,12 +854,10 @@
       (define u (string->url s3-url))
       (unless (url-host u) (error "no host"))
       (values (url-host u)
-              (let ([s (regexp-replace* 
-                        #rx"/$"
-                        (string-join (map path/param-path (url-path u))
-                                     "/")
-                        "")])
-                (if (string=? s "")
+              (let ([s (string-join (map path/param-path (url-path u))
+                                    "/")])
+                (if (or (string=? s "")
+                        (string=? s "/"))
                     #f
                     s)))))
 
