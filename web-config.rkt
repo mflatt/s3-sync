@@ -11,5 +11,5 @@
 (define web-reduced-redundancy? #t)
 (define web-upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
 
-(define web-gzip-rx #rx"[.](html|css|js)$")
+(define web-gzip-rx #rx"[.](html|css|js|svg)$")
 (define web-gzip-min-size 1024)

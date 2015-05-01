@@ -109,7 +109,7 @@ The following options (supply them after @exec{s3-sync} and before
 
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
        redundancy, compression for @filepath{.html}, @filepath{.css},
-       and @filepath{.js} files that are 1K or larger, and
+       @filepath{.js}, and @filepath{.svg} files that are 1K or larger, and
        @exec{Content-Cache} @exec{"max-age=0, no-cache"} metadata.}
 
 ]
@@ -352,7 +352,7 @@ Default metadata for web content, currently @racket[(hash
 @defthing[web-gzip-rx regexp?]{
 
 Default regexp for paths to be @exec{gzip}ped, currently
-@racket[#rx"[.](html|css|js)$"].}
+@racket[#rx"[.](html|css|js|svg)$"].}
 
 
 @defthing[web-gzip-min-size exact-nonnegative-integer?]{
