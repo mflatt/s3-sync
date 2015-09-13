@@ -2,7 +2,7 @@
 
 (define collection "s3-sync")
 
-(define deps '(("aws" #:version "0.2")
+(define deps '(("aws" #:version "1.6")
                ("http" #:version "0.2")
                ("base" #:version "6.0.0.4")))
 

@@ -97,6 +97,10 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{s3-hostname} @nonterm{hostname} --- set the S3 hostname
        to @nonterm{hostname} instead of @tt{s3.amazon.com}.}
 
+ @item{@DFlag{region} @nonterm{region} --- set the S3 region to
+       @nonterm{region} (e.g., @exec{us-east-1}) instead of issuing a
+       query to locate the bucket's region.}
+
  @item{@DFlag{error-links} --- report an error if a soft link is found; this is the
        default treatment of soft links.}
  @item{@DFlag{follow-links} --- follow soft links.}
@@ -119,8 +123,8 @@ The following options (supply them after @exec{s3-sync} and before
 @defmodule[s3-sync]
 
 The @racketmodname[s3-sync] library uses @racketmodname[aws/s3], so
-use @racket[ensure-have-keys] and @racket[s3-host] before calling
-@racket[s3-sync].
+use @racket[ensure-have-keys], @racket[s3-host], and @racket[s3-region]
+before calling @racket[s3-sync].
 
 @defproc[(s3-sync [local-path path-string?]
                   [s3-bucket string?]

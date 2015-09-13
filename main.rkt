@@ -743,7 +743,7 @@
            "gzip.rkt")
 
   (define s3-hostname "s3.amazonaws.com")
-  (define region #f)
+  (define use-region #f)
 
   (define dry-run? #f)
   (define jobs 1)
@@ -807,6 +807,8 @@
      #:once-each
      [("--s3-hostname") hostname "Set S3 hostname (instead of `s3.amazon.com`)"
       (set! s3-hostname hostname)]
+     [("--region") region "Set S3 region (instead of issuing a query)"
+      (set! use-region region)]
      #:once-any
      [("--error-links") "Treat soft links as errors (the default)"
       (set! link-mode 'error)]
@@ -866,13 +868,8 @@
   (s3-host s3-hostname)
 
   (s3-region
-   (or region
-       ;; Thanks to Daniel Brunner
-       (parameterize ([s3-path-requests? #t])
-         (define xpr (get/proc (string-append s3-bucket "/?location") read-entity/xexpr))
-         (and (list? xpr)
-              (= (length xpr) 3)
-              (third xpr)))))
+   (or use-region
+       (bucket-location s3-bucket)))
 
   (define-values (call-with-gzip-file gzip-content-encoding)
     (if gzip-rx
