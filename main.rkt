@@ -743,6 +743,7 @@
            "gzip.rkt")
 
   (define s3-hostname "s3.amazonaws.com")
+  (define region #f)
 
   (define dry-run? #f)
   (define jobs 1)
@@ -863,6 +864,15 @@
 
   (ensure-have-keys)
   (s3-host s3-hostname)
+
+  (s3-region
+   (or region
+       ;; Thanks to Daniel Brunner
+       (parameterize ([s3-path-requests? #t])
+         (define xpr (get/proc (string-append s3-bucket "/?location") read-entity/xexpr))
+         (and (list? xpr)
+              (= (length xpr) 3)
+              (third xpr)))))
 
   (define-values (call-with-gzip-file gzip-content-encoding)
     (if gzip-rx
