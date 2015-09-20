@@ -416,7 +416,7 @@
           (task!
            task-id
            (lambda ()
-             (get/file (b+k key)
+             (get/file (b+k (encode-path key))
                        f
                        #:exists 'truncate/replace)))))
 
@@ -494,7 +494,7 @@
                            ((file-size f) . > . MULTIPART-THRESHOLD))
                       multipart-put-file-via-bytes
                       put-file-via-bytes)
-                  (b+k key)
+                  (b+k (encode-path key))
                   f
                   call-with-file-stream
                   (or content-type "application/octet-stream")
