@@ -69,6 +69,7 @@
                  #:dry-run? [dry-run? #f]
                  #:delete? [delete? #f]
                  #:shallow? [shallow? #f]
+                 #:check-metadata? [check-metadata? #f]
                  #:jobs [jobs 1]
                  #:include [include-rx #f]
                  #:exclude [exclude-rx #f]
@@ -361,9 +362,12 @@
 
       ;; Call `get-task-id` to get permission to run a task
       ;; and an id to report in logging:
-      (define (get-task-id)
+      (define (get-task-id [even-for-dry-run? #f])
         (cond
-         [(or dry-run? (= 1 jobs)) #f]
+         [(or (and dry-run?
+                   (not even-for-dry-run?))
+              (= 1 jobs))
+          #f]
          [else
           (semaphore-wait task-sema)
           (when (positive? (hash-count failures))
@@ -420,6 +424,65 @@
                        f
                        #:exists 'truncate/replace)))))
 
+      ;; Accumulates upload items that need metadat checking:
+      (define check-metadata null)      
+      ;; Acculuates headers and ACL info for `check-metadata?`:
+      (define header-store (make-hash))
+
+      (define (download-headers key f acl?)
+        (define task-id (get-task-id #t))
+        (log-info (format "Download metadata: ~a~a" (format-to key f) (task-id-str task-id)))
+        (task!
+         task-id
+         (lambda ()
+           (define p (b+k (encode-path key)))
+           (define h (head p))
+           (define acl (and acl? (get-acl p)))
+           (hash-set! header-store key (list h acl)))))
+      
+      (define (extract-canned-acl acl bucket-acl props)
+        (define (get-owner acl)
+          (define acll
+            (and acl
+                 (assq 'AccessControlList (cdr acl))))
+          (let* ([a (and acll (assq 'Owner (cddr acll)))]
+                 [a (and a (assq 'ID (cddr a)))])
+            (and a (caddr a))))
+        (define (get-user key who)
+          (define acll
+            (and acl
+                 (assq 'AccessControlList (cddr acl))))
+          (and acll
+               (sort
+                (for/list ([i (cddr acll)]
+                           #:when
+                           (and (eq? 'Grant (car i))
+                                (let ([a (assq 'Grantee (cddr i))])
+                                  (and a
+                                       (let ([a (assq key (cddr a))])
+                                         (and a (equal? (caddr a) who)))))))
+                  (let ([a (assq 'Permission (cddr i))])
+                    (caddr a)))
+                string<?)))
+        (define owner-id (get-owner acl))
+        (define bucket-owner-id (get-owner bucket-acl))
+        (define all-users (get-user 'URI "http://acs.amazonaws.com/groups/global/AllUsers"))
+        (define authenticated-users (get-user 'URI "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"))
+        (define ec2-users (get-user 'DisplayName "za-team"))
+        (define bucket-owner (get-user 'ID bucket-owner-id))
+        (cond
+         [(equal? all-users '("READ")) (hash-set props 'x-amz-acl "public-read")]
+         [(equal? all-users '("READ" "WRITE")) (hash-set props 'x-amz-acl "public-read-write")]
+         [(equal? ec2-users '("READ")) (hash-set props 'x-amz-acl "aws-exec-read")]
+         [(equal? authenticated-users '("READ")) (hash-set props 'x-amz-acl "authenticated-read")]
+         [(and (not (equal? owner-id bucket-owner-id))
+               (equal? bucket-owner '("READ")))
+          (hash-set props 'x-amz-acl "bucket-owner-read")]
+         [(and (not (equal? owner-id bucket-owner-id))
+               (equal? bucket-owner '("FULL_CONTROL")))
+          (hash-set props 'x-amz-acl "bucket-owner-full-control")]
+         [else props]))
+
       (define abs-src-dir (path->complete-path src-dir))
       (define (link->dest f)
         (define raw-dest (resolve-path f))
@@ -460,7 +523,7 @@
                     (substring key (add1 len))]
                    [else key]))
         (apply build-path (string-split p "/")))
-      
+
       (define (maybe-upload f key in-link)
         (define old (hash-ref remote-content key #f))
         (define call-with-file-stream (if in-link
@@ -469,7 +532,8 @@
                                                (make-call-with-file-stream key f))))
         (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
         (cond
-         [(equal? old new)
+         [(and (equal? old new)
+               (not (and upload? check-metadata?)))
           (void)]
          [upload?
           (define content-type (and (not in-link)
@@ -479,42 +543,53 @@
           (define content-encoding (and (not in-link)
                                         get-content-encoding
                                         (get-content-encoding key f)))
-          (define task-id (get-task-id))
-          (log-info (format "Upload: ~a as: ~a~a~a"
-                            (format-to f key)
-                            (if in-link 'redirect content-type)
-                            (if content-encoding (format " ~a" content-encoding) "")
-                            (task-id-str task-id)))
-          (unless dry-run?
-            (task!
-             task-id
-             (lambda ()
-               (define s
-                 ((if (and (not in-link)
-                           ((file-size f) . > . MULTIPART-THRESHOLD))
-                      multipart-put-file-via-bytes
-                      put-file-via-bytes)
-                  (b+k (encode-path key))
-                  f
-                  call-with-file-stream
-                  (or content-type "application/octet-stream")
-                  (cond
-                   [in-link
-                    (define rel-path
-                      (string-append
-                       "/"
-                       (encode-path (string-join (map path-element->string
-                                                      (explode-path
-                                                       (if sub
-                                                           (build-path sub in-link)
-                                                           in-link)))
-                                                 "/"))))
-                    (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
-                   [content-encoding
-                    (hash-set upload-props 'Content-Encoding content-encoding)]
-                   [else upload-props])))
-               (when s
-                 (failure "put" f s)))))]
+          (define do-upload-props
+            (cond
+             [content-encoding
+              (hash-set upload-props 'Content-Encoding content-encoding)]
+             [else upload-props]))
+          (cond
+           [(and check-metadata?
+                 (equal? old new))
+            (set! check-metadata (cons (list key f do-upload-props)
+                                       check-metadata))
+            (download-headers key f (hash-ref do-upload-props 'x-amz-acl #f))]
+           [else
+            (define task-id (get-task-id))
+            (log-info (format "Upload: ~a as: ~a~a~a"
+                              (format-to f key)
+                              (if in-link 'redirect content-type)
+                              (if content-encoding (format " ~a" content-encoding) "")
+                              (task-id-str task-id)))
+            (unless dry-run?
+              (task!
+               task-id
+               (lambda ()
+                 (define s
+                   ((if (and (not in-link)
+                             ((file-size f) . > . MULTIPART-THRESHOLD))
+                        multipart-put-file-via-bytes
+                        put-file-via-bytes)
+                    (b+k (encode-path key))
+                    f
+                    call-with-file-stream
+                    (or content-type "application/octet-stream")
+                    (cond
+                     [in-link
+                      (define rel-path
+                        (string-append
+                         "/"
+                         (encode-path (string-join (map path-element->string
+                                                        (explode-path
+                                                         (if sub
+                                                             (build-path sub in-link)
+                                                             in-link)))
+                                                   "/"))))
+                      (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
+                     [else
+                      do-upload-props])))
+                 (when s
+                   (failure "put" f s)))))])]
          [old
           (download "changed" key f)]))
       
@@ -565,6 +640,57 @@
                 (error 's3-sync "path error or broken link\n  path: ~e" f)])))]))
 
       (sync-tasks)
+      
+      (when (and upload?
+                 check-metadata?)
+        (define bucket-acl (get-acl (~a bucket "/")))
+        (for ([e (in-list check-metadata)])
+          (define-values (key f upload-props) (apply values e))
+          (define current (hash-ref header-store key
+                                    (lambda ()
+                                      (error 's3-sync
+                                             "cannot find header info\n  path: ~e"
+                                             key))))
+          (define-values (h-str acl) (apply values current))
+          (define current-props (extract-canned-acl
+                                 acl
+                                 bucket-acl
+                                 (if h-str
+                                     (heads-string->dict h-str)
+                                     #hasheq())))
+
+          (define upload-acl (hash-ref upload-props 'x-amz-acl #f))
+          (define same-acl?
+            (or (not upload-acl)
+                (equal? upload-acl
+                        (hash-ref current-props 'x-amz-acl "private"))))
+
+          (define same-other-props?
+            (for/and ([(k v) (in-hash upload-props)]
+                      #:unless (eq? k 'x-amz-acl))
+              (equal? v (hash-ref current-props k
+                                  (case k
+                                    [(x-amz-storage-class) "STANDARD"]
+                                    [(x-amz-acl) "private"]
+                                    [else #f])))))
+          
+          (unless (and same-acl? same-other-props?)
+            (define task-id (get-task-id))
+            (log-info (format "Upload metadata: ~a~a" (format-to key f) (task-id-str task-id)))
+            (unless dry-run?
+              (task!
+               task-id
+               (lambda ()
+                 (define p (b+k (encode-path key)))
+                 ;; If only the ACL changes, we need to use `put-acl`,
+                 ;; otherwise we can use `copy`:
+                 (cond
+                  [same-other-props?
+                   (put-acl p #f (hash 'x-amz-acl upload-acl))]
+                  [else
+                   (copy p p upload-props)]))))))
+
+        (sync-tasks))
 
       (when download?
         ;; Get list of needed files, then sort, then download:
@@ -749,6 +875,7 @@
   (define jobs 1)
   (define shallow? #f)
   (define delete? #f)
+  (define check-metadata? #f)
   (define link-mode 'error)
   (define include-rx #f)
   (define exclude-rx #f)
@@ -783,6 +910,8 @@
       (set! shallow? #t)]
      [("--delete") "Remove files in destination with no source"
       (set! delete? #t)]
+     [("--check-metadata") "Check existing metadata for upload"
+      (set! check-metadata? #t)]
      [("--acl") acl "Access control list for upload"
       (set! s3-acl acl)]
      [("--reduced") "Upload with reduced redundancy"
@@ -881,6 +1010,7 @@
            s3-sub
            #:shallow? shallow?
            #:upload? upload?
+           #:check-metadata? check-metadata?
            #:acl s3-acl
            #:upload-metadata upload-metadata
            #:reduced-redundancy? reduced-redundancy?

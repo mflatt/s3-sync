@@ -72,6 +72,10 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{reduced} --- when uploading, specificy
        reduced-redundancy storage.}
 
+ @item{@DFlag{check-metadata} -- when uploading, check whether an
+       existing item has the metadata that would be uploaded
+       (including access control), and adjust the metadata if not.}
+
  @item{@DFlag{include} @nonterm{regexp} --- consider only items whose
        name within the S3 bucket matches @nonterm{regexp}, where
        @nonterm{regexp} uses ``Perl-compatible'' syntax.}
@@ -108,7 +112,7 @@ The following options (supply them after @exec{s3-sync} and before
        rules to be installed for @nonterm{bucket} as a web site (upload only).}
  @item{@DFlag{redirects-links} --- treat soft links as individual
        redirections to be installed as metadata on a @nonterm{bucket}'s
-       object, while the object itself is made empty (upload only).}
+       item, while the item itself is made empty (upload only).}
  @item{@DFlag{ignore-links} --- ignore soft links.}
 
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
@@ -132,6 +136,7 @@ before calling @racket[s3-sync].
                   [#:upload? upload? any/c #t]
                   [#:jobs jobs inexact-positive-integer? 1]
                   [#:shallow? shallow? any/c #f]
+                  [#:check-metadata? check-metadata? any/c #f]
                   [#:dry-run? dry-run? any/c #f]
                   [#:delete? delete? any/c #f]
                   [#:include include-rx (or/c #f regexp?) #f]
@@ -185,6 +190,21 @@ bucket item is downloaded to @racket[local-path]; if
 file name.
 
 If @racket[shallow?] is true, then in download mode, bucket items are
+downloaded only when they correspond to directories that exist already
+in @racket[local-path] (which is useful when @racket[local-path]
+refers to a directory). In both download and upload modes, a true
+value of @racket[shallow?] causes the state of @racket[s3-bucket] to
+be queried in a directory-like way, exploring only relevant
+directories; that exploration can be faster than querying the full
+content of @racket[s3-bucket] if it contains many more nested items
+(with the prefix @racket[s3-path]) than files within
+@racket[local-path].
+
+If @racket[check-metadata?] is true, then in upload mode, bucket items
+are checked to ensure that the current metadata matches the metadata
+that would be uploaded, and the bucket item's metadata is adjust if
+not.
+
 downloaded only when they correspond to directories that exist already
 in @racket[local-path] (which is useful when @racket[local-path]
 refers to a directory). In both download and upload modes, a true
@@ -267,8 +287,8 @@ in @racket[local-path]:
        installed for @racket[s3-bucket] as a web site on upload}
 
  @item{@racket['redirects] --- treat it as a redirection rule to be
-       installed for @racket[s3-bucket]'s object as metadata on upload,
-       while the object itself is uploaded as empty}
+       installed for @racket[s3-bucket]'s item as metadata on upload,
+       while the item itself is uploaded as empty}
 
  @item{@racket['ignore] --- ignore}
 
@@ -282,7 +302,8 @@ level to a logger whose name is @racket['s3-sync].
 @history[#:changed "1.2" @elem{Added @racket['redirects] mode.}
          #:changed "1.3" @elem{Added the @racket[upload-metadata] argument.}
          #:changed "1.4" @elem{Added support for a single file as @racket[local-path]
-                               and a bucket item name as @racket[s3-path].}]}
+                               and a bucket item name as @racket[s3-path].}
+         #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}]}
 
 
 @; ------------------------------------------------------------
