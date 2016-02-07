@@ -78,6 +78,7 @@
                  #:get-content-encoding [get-content-encoding #f]
                  #:acl [acl #f]
                  #:upload-metadata [upload-metadata (hash)]
+                 #:upload-metadata-mapping [upload-metadata-mapping (hash)]
                  #:reduced-redundancy? [reduced-redundancy? #f]
                  #:link-mode [link-mode 'error]
                  #:log [log-info (lambda (s)
@@ -147,15 +148,19 @@
 
       (define download? (not upload?))
       
+      (define (merge-hash orig additional)
+        (for/fold ([orig orig]) ([(k v) (in-hash additional)])
+          (hash-set orig k v)))
+    
       (define upload-props
-        (let* ([ht upload-metadata]
+        (let* ([ht (hash)]
                [ht (if reduced-redundancy?
                        (hash-set ht 'x-amz-storage-class "REDUCED_REDUNDANCY")
                        ht)]
                [ht (if acl
                        (hash-set ht 'x-amz-acl acl) ; "public-read"
                        ht)])
-          ht))
+          (merge-hash ht upload-metadata)))
 
       (define (included? s)
         (let ([s (if (path? s)
@@ -543,11 +548,16 @@
           (define content-encoding (and (not in-link)
                                         get-content-encoding
                                         (get-content-encoding key f)))
-          (define do-upload-props
+          (define do-upload-props-shared
             (cond
-             [content-encoding
+             [(and content-encoding
+                   (not (hash-ref upload-props 'Content-Encoding #f)))
               (hash-set upload-props 'Content-Encoding content-encoding)]
              [else upload-props]))
+          (define do-upload-props-specific
+            (hash-ref upload-metadata-mapping key #hash()))
+          (define do-upload-props
+            (merge-hash do-upload-props-shared do-upload-props-specific))
           (cond
            [(and check-metadata?
                  (equal? old new))
@@ -585,7 +595,7 @@
                                                              (build-path sub in-link)
                                                              in-link)))
                                                    "/"))))
-                      (hash-set upload-props 'x-amz-website-redirect-location rel-path)]
+                      (hash-set do-upload-props 'x-amz-website-redirect-location rel-path)]
                      [else
                       do-upload-props])))
                  (when s
@@ -688,8 +698,8 @@
                   [same-other-props?
                    (put-acl p #f (hash 'x-amz-acl upload-acl))]
                   [else
-                   (copy p p upload-props)]))))))
-
+                   (copy p p (hash-set upload-props
+                                       'x-amz-metadata-directive "REPLACE"))]))))))
         (sync-tasks))
 
       (when download?
@@ -883,6 +893,7 @@
   (define gzip-size -1)
   (define s3-acl #f)
   (define upload-metadata (hash))
+  (define upload-metadata-mapping (hash))
   (define reduced-redundancy? #f)
 
   (define (check-regexp rx)
@@ -933,6 +944,25 @@
             (hash-set upload-metadata
                       (string->symbol name)
                       value))]
+     [("++upload-metadata-mapping") file "Merge item-specific metadata from <file>"
+      (define ht (call-with-input-file* file read))
+      (unless (and (hash? ht)
+                   (for/and ([(k v) (in-hash ht)])
+                     (and (string? k)
+                          (hash? v)
+                          (for/and ([(k v) (in-hash v)])
+                            (and (symbol? k)
+                                 (string? v))))))
+        (raise-user-error 's3-sync
+                          (~a "content of file is not a metadata mapping;\n"
+                              " a metadata mapping must be a hash table of strings\n"
+                              " to hash tables that map symbols to strings\n"
+                              "  file: ~a" file)))
+      (set! upload-metadata-mapping
+            (for/fold ([ht upload-metadata-mapping]) ([(k n-ht) (in-hash ht)])
+              (hash-set ht k
+                        (for/fold ([o-ht (hash-ref ht k (hash))]) ([(k v) (in-hash n-ht)])
+                          (hash-set n-ht k v)))))]
      #:once-each
      [("--s3-hostname") hostname "Set S3 hostname (instead of `s3.amazon.com`)"
       (set! s3-hostname hostname)]
@@ -1013,6 +1043,7 @@
            #:check-metadata? check-metadata?
            #:acl s3-acl
            #:upload-metadata upload-metadata
+           #:upload-metadata-mapping upload-metadata-mapping
            #:reduced-redundancy? reduced-redundancy?
            #:error raise-user-error
            #:include include-rx

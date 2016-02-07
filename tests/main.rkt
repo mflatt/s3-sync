@@ -81,6 +81,7 @@
     (define plan-count 0)
     (define (count-planned s)
       (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z]_test" s)
+        (log-error ">> ~a" s)
         (set! plan-count (add1 plan-count))))
 
     (step "Dry run of upload")
@@ -108,6 +109,43 @@
     (s3-sync dir bucket #f #:log count-planned #:jobs jobs
              #:upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
     (check-equal? plan-count 2)
+    
+    (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
+    (check-false (regexp-match? #rx"Cache-Control: max-age=0" (head (~a bucket/ "z_test"))))
+
+    (step "Update metadata")
+    (set! plan-count 0)
+    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+             #:upload-metadata (hash 'x-amz-meta-zub "7"))
+    (check-equal? plan-count 0)
+    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+             #:check-metadata? #t
+             #:upload-metadata (hash 'x-amz-meta-zub "7"))
+    (check-equal? plan-count 6) ; checks plus uploads
+    (set! plan-count 0)
+    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+             #:check-metadata? #t
+             #:upload-metadata (hash 'x-amz-meta-zub "7"))
+    (check-equal? plan-count 3) ; just checks
+
+    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
+    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "z_test")))
+
+    (step "Merge metadata")
+    (set! plan-count 0)
+    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+             #:check-metadata? #t
+             #:upload-metadata (hash 'x-amz-meta-zub "7")
+             #:upload-metadata-mapping (hash "y_test" (hash 'x-amz-meta-zub "8")
+                                             "z_test" (hash 'x-amz-meta-biq "9")))
+    (check-equal? plan-count 5) ; checks plus 2 uploads
+
+    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
+    (check-regexp-match #rx"x-amz-meta-zub: 8" (head (~a bucket/ "y_test")))
+    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "z_test")))
+    (check-regexp-match #rx"x-amz-meta-biq: 9" (head (~a bucket/ "z_test")))
+    (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ "x_test"))))
+    (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ "y_test"))))
 
     (step "Download and rename individual file")
     (set! plan-count 0)
@@ -130,9 +168,6 @@
              #:upload? #f #:log count-planned #:jobs jobs)
     (check-equal? plan-count 1)
     (check-equal? (file-content "y_test") (file-content "like_y_test"))
-
-    (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
-    (check-false (regexp-match? #rx"Cache-Control: max-age=0" (head (~a bucket/ "z_test"))))
 
     (step "Download removed files")
     (remove-file "x_test")

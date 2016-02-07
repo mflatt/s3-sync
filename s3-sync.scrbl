@@ -95,8 +95,18 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DPFlag{upload-metadata} @nonterm{name} @nonterm{value} ---
        includes @nonterm{name} with @nonterm{value} as metadata when
        uploading (without updating metadata for any file that is not
-       uploaded).  This flag can be specified multiple times to add
-       multiple metadata entries.}
+       uploaded). Metadata specified this way overrides metadata
+       determined in other ways, except via
+       @DPFlag{upload-metadata-mapping}. This flag can be specified
+       multiple times to add multiple metadata entries.}
+
+ @item{@DPFlag{upload-metadata-mapping} @nonterm{file} ---
+       @racket[read]s @nonterm{file} to obtain a hash table that maps
+       bucket-item names to a hash table of metadata, where a metadata
+       hash table maps symbols to strings. Metadata supplied this way
+       overrides metadata determined in other ways. This flag can be
+       specified multiple times, and the mappings are merged so that
+       later files override mappings supplied by earlier files.}
 
  @item{@DFlag{s3-hostname} @nonterm{hostname} --- set the S3 hostname
        to @nonterm{hostname} instead of @tt{s3.amazon.com}.}
@@ -161,6 +171,12 @@ before calling @racket[s3-sync].
                   [#:upload-metadata upload-metadata (and/c (hash/c symbol? string?)
                                                             immutable?)
                                      #hash()]
+                  [#:upload-metadata-mapping upload-metadata-mapping
+                                             (and/c (hash/c string?
+                                                            (and/c (hash/c symbol? string?)
+                                                                   immutable?))
+                                                    immutable?)
+                                             #hash()]
                   [#:link-mode link-mode (or/c 'error 'follow 'redirect 'redirects 'ignore) 'error]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
@@ -204,16 +220,6 @@ If @racket[check-metadata?] is true, then in upload mode, bucket items
 are checked to ensure that the current metadata matches the metadata
 that would be uploaded, and the bucket item's metadata is adjust if
 not.
-
-downloaded only when they correspond to directories that exist already
-in @racket[local-path] (which is useful when @racket[local-path]
-refers to a directory). In both download and upload modes, a true
-value of @racket[shallow?] causes the state of @racket[s3-bucket] to
-be queried in a directory-like way, exploring only relevant
-directories; that exploration can be faster than querying the full
-content of @racket[s3-bucket] if it contains many more nested items
-(with the prefix @racket[s3-path]) than files within
-@racket[local-path].
 
 If @racket[dry-run?] is true, then actions needed for synchronization
 are reported via @racket[log], but no uploads, downloads, deletions,
@@ -260,18 +266,20 @@ If @racket[acl] is not @racket[#f], then it use as the S3 access
 control list on upload. For example, supply @racket["public-read"] to
 make items public for reading. More specifically, if @racket[acl] is
 not @racket[#f], then @racket['x-amz-acl] is set to @racket[acl] in
-@racket[upload-metadata].
+@racket[upload-metadata] (if it is not set already).
 
 If @racket[reduced-redundancy?] is true, then items are uploaded to S3
 with reduced-redundancy storage (which costs less, so it is suitable
 for files that are backed up elsewhere).  More specifically, if
 @racket[reduced-redundancy] is true, then
 @racket['x-amz-storage-class] is set to @racket["REDUCED_REDUNDANCY"]
-in @racket[upload-metadata].
+in @racket[upload-metadata] (if it is not set already).
 
 The @racket[upload-metadata] hash table provides metadata to include
 with any file upload (and only to files that are otherwise determined
-to need uploading).
+to need uploading). The @racket[upload-metadata-mapping] provides a
+mapping from bucket item names to metadata that adds and overrides
+metadata for the specific item.
 
 The @racket[link-mode] argument determines the treatment of soft links
 in @racket[local-path]:
@@ -303,7 +311,8 @@ level to a logger whose name is @racket['s3-sync].
          #:changed "1.3" @elem{Added the @racket[upload-metadata] argument.}
          #:changed "1.4" @elem{Added support for a single file as @racket[local-path]
                                and a bucket item name as @racket[s3-path].}
-         #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}]}
+         #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}
+         #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}]}
 
 
 @; ------------------------------------------------------------
