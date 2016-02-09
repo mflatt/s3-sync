@@ -697,15 +697,16 @@
               (task!
                task-id
                (lambda ()
-                 (define p (b+k (encode-path key)))
                  ;; If only the ACL changes, we need to use `put-acl`,
                  ;; otherwise we can use `copy`:
                  (cond
                   [same-other-props?
-                   (put-acl p #f (hash 'x-amz-acl upload-acl))]
+                   (put-acl (b+k (encode-path key)) #f (hash 'x-amz-acl upload-acl))]
                   [else
-                   (copy p p (hash-set upload-props
-                                       'x-amz-metadata-directive "REPLACE"))]))))))
+                   (copy (b+k key)
+                         (b+k (encode-path key))
+                         (hash-set upload-props
+                                   'x-amz-metadata-directive "REPLACE"))]))))))
         (sync-tasks))
 
       (when download?
