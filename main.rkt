@@ -563,9 +563,11 @@
           (cond
            [(and check-metadata?
                  (equal? old new))
-            (set! check-metadata (cons (list key f (hash-set do-upload-props
-                                                             'Content-Type
-                                                             content-type))
+            (set! check-metadata (cons (list key f (if in-link
+                                                       do-upload-props
+                                                       (hash-set do-upload-props
+                                                                 'Content-Type
+                                                                 content-type)))
                                        check-metadata))
             (download-headers key f (hash-ref do-upload-props 'x-amz-acl #f))]
            [else
