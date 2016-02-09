@@ -541,8 +541,12 @@
                (not (and upload? check-metadata?)))
           (void)]
          [upload?
+          (define do-upload-props-specific
+            (hash-ref upload-metadata-mapping key #hash()))
           (define content-type (and (not in-link)
-                                    (or (and get-content-type
+                                    (or (hash-ref do-upload-props-specific 'Content-Type #f)
+                                        (hash-ref upload-props 'Content-Type #f)
+                                        (and get-content-type
                                              (get-content-type key f))
                                         (path->content-type key))))
           (define content-encoding (and (not in-link)
@@ -554,14 +558,14 @@
                    (not (hash-ref upload-props 'Content-Encoding #f)))
               (hash-set upload-props 'Content-Encoding content-encoding)]
              [else upload-props]))
-          (define do-upload-props-specific
-            (hash-ref upload-metadata-mapping key #hash()))
           (define do-upload-props
             (merge-hash do-upload-props-shared do-upload-props-specific))
           (cond
            [(and check-metadata?
                  (equal? old new))
-            (set! check-metadata (cons (list key f do-upload-props)
+            (set! check-metadata (cons (list key f (hash-set do-upload-props
+                                                             'Content-Type
+                                                             content-type))
                                        check-metadata))
             (download-headers key f (hash-ref do-upload-props 'x-amz-acl #f))]
            [else
