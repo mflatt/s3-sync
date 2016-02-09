@@ -18,6 +18,7 @@
                 (list '#:acl web-acl
                       '#:reduced-redundancy? web-reduced-redundancy?
                       '#:upload-metadata web-upload-metadata
+                      '#:upload-metadata-mapping web-upload-metadata-mapping
                       '#:make-call-with-input-file call-with-gzip-file
                       '#:get-content-encoding gzip-content-encoding)))
         (keyword-apply s3-sync kws kw-vals rest)))

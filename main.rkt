@@ -37,6 +37,11 @@
    (map uri-encode (string-split p "/"))
    "/"))
 
+(define (merge-hash orig additional)
+  ;; `additional` overrides `orig`
+  (for/fold ([orig orig]) ([(k v) (in-hash additional)])
+    (hash-set orig k v)))
+
 (define MULTIPART-THRESHOLD (* 1024 1024 10))
 (define CHUNK-SIZE MULTIPART-THRESHOLD)
 
@@ -147,10 +152,6 @@
                           (if upload? local remote))))
 
       (define download? (not upload?))
-      
-      (define (merge-hash orig additional)
-        (for/fold ([orig orig]) ([(k v) (in-hash additional)])
-          (hash-set orig k v)))
     
       (define upload-props
         (let* ([ht (hash)]
@@ -542,7 +543,9 @@
           (void)]
          [upload?
           (define do-upload-props-specific
-            (hash-ref upload-metadata-mapping key #hash()))
+            (if (hash? upload-metadata-mapping)
+                (hash-ref upload-metadata-mapping key #hash())
+                (upload-metadata-mapping key)))
           (define content-type (and (not in-link)
                                     (or (hash-ref do-upload-props-specific 'Content-Type #f)
                                         (hash-ref upload-props 'Content-Type #f)
@@ -903,6 +906,10 @@
   (define upload-metadata-mapping (hash))
   (define reduced-redundancy? #f)
 
+  (define upload-metadata-mapping-proc
+    (lambda (key)
+      (hash-ref upload-metadata-mapping key #hash())))
+
   (define (check-regexp rx)
     (with-handlers ([exn:fail? (lambda (exn)
                                  (raise-user-error 's3-sync
@@ -993,10 +1000,12 @@
       (unless gzip-rx (set! gzip-rx web-gzip-rx))
       (when (= -1 gzip-size) (set! gzip-size web-gzip-min-size))
       (set! upload-metadata
-            (for/fold ([ht upload-metadata]) ([(k v) (in-hash web-upload-metadata)])
-              (if (hash-ref ht k #f)
-                  ht
-                  (hash-set ht k v))))]
+            (merge-hash web-upload-metadata upload-metadata))
+      (set! upload-metadata-mapping-proc
+            (let ([proc upload-metadata-mapping-proc])
+              (lambda (key)
+                (merge-hash (proc key)
+                            (web-upload-metadata-mapping key)))))]
      #:args
      (src dest)
      (values src dest)))
@@ -1050,7 +1059,7 @@
            #:check-metadata? check-metadata?
            #:acl s3-acl
            #:upload-metadata upload-metadata
-           #:upload-metadata-mapping upload-metadata-mapping
+           #:upload-metadata-mapping upload-metadata-mapping-proc
            #:reduced-redundancy? reduced-redundancy?
            #:error raise-user-error
            #:include include-rx

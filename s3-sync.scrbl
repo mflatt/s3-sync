@@ -127,8 +127,12 @@ The following options (supply them after @exec{s3-sync} and before
 
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
        redundancy, compression for @filepath{.html}, @filepath{.css},
-       @filepath{.js}, and @filepath{.svg} files that are 1K or larger, and
-       @exec{Content-Cache} @exec{"max-age=0, no-cache"} metadata.}
+       @filepath{.js}, and @filepath{.svg} files that are 1K or larger,
+       @exec{Content-Cache} @exec{"max-age=0, no-cache"} metadata for most files,
+       and @exec{Content-Cache} @exec{"max-age=31536000, public"} metadata
+       for files with the following suffixes: @filepath{.css}, @filepath{.js},
+       @filepath{.png}, @filepath{.jpg}, @filepath{.jpeg}, @filepath{.gif},
+       @filepath{.svg}, or @filepath{.ico}.}
 
 ]
 
@@ -172,10 +176,13 @@ before calling @racket[s3-sync].
                                                             immutable?)
                                      #hash()]
                   [#:upload-metadata-mapping upload-metadata-mapping
-                                             (and/c (hash/c string?
-                                                            (and/c (hash/c symbol? string?)
-                                                                   immutable?))
-                                                    immutable?)
+                                             (or/c
+                                              (string? . -> . (and/c (hash/c symbol? string?)
+                                                                     immutable?))
+                                              (and/c (hash/c string?
+                                                             (and/c (hash/c symbol? string?)
+                                                                    immutable?))
+                                                     immutable?))
                                              #hash()]
                   [#:link-mode link-mode (or/c 'error 'follow 'redirect 'redirects 'ignore) 'error]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
@@ -312,7 +319,8 @@ level to a logger whose name is @racket['s3-sync].
          #:changed "1.4" @elem{Added support for a single file as @racket[local-path]
                                and a bucket item name as @racket[s3-path].}
          #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}
-         #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}]}
+         #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}
+         #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}]}
 
 
 @; ------------------------------------------------------------
@@ -350,6 +358,7 @@ defaults to be suitable for web-page uploads:
  @item{@racket[#:acl] --- defaults to @racket[web-acl]}
  @item{@racket[#:reduced-redundancy?] --- defaults to @racket[web-reduced-redundancy?]}
  @item{@racket[#:upload-metadata] --- defaults to @racket[web-upload-metadata]}
+ @item{@racket[#:upload-metadata-mapping] --- defaults to @racket[web-upload-metadata-mapping]}
  @item{@racket[#:make-call-with-input-file] --- defaults to 
                a @exec{gzip} of files that match @racket[web-gzip-rx]
                and @racket[web-gzip-min-size]}
@@ -381,6 +390,18 @@ The default storage mode for web content, currently @racket[#t].}
 
 Default metadata for web content, currently @racket[(hash
 'Cache-Control "max-age=0, no-cache")].}
+
+
+@defproc[(web-upload-metadata-mapping [item string?])
+         (and/c (hash/c symbol? string?)
+                immutable?)]{
+
+Item-specific metadata for web content, currently produces @racket[(hash
+'Cache-Control "max-age=31536000, public")] for a @racket[item]
+that ends in @filepath{.css}, @filepath{.js}, @filepath{.png}, @filepath{.jpg},
+@filepath{.jpeg}, @filepath{.gif}, @filepath{.svg}, or @filepath{.ico}.
+
+@history[#:added "1.7"]}
 
 
 @defthing[web-gzip-rx regexp?]{

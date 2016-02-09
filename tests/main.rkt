@@ -417,7 +417,7 @@
     (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
 
     (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
-    (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ (encode-path "z@test.css"))))
+    (check-regexp-match #rx"Cache-Control: max-age=31536000" (head (~a bucket/ (encode-path "z@test.css"))))
 
     (step "Empty local directory")
     (for ([f (in-list (directory-list dir #:build? #t))])
