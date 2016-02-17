@@ -63,7 +63,7 @@
 
   (define (encode-path p)
     (string-join
-     (map uri-encode (regexp-split #rx"/" p))
+     (map uri-unreserved-encode (regexp-split #rx"/" p))
      "/"))
 
   (ensure-have-keys)

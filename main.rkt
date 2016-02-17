@@ -34,7 +34,7 @@
 
 (define (encode-path p)
   (string-join
-   (map uri-encode (string-split p "/"))
+   (map uri-unreserved-encode (string-split p "/"))
    "/"))
 
 (define (merge-hash orig additional)
