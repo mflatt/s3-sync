@@ -13,7 +13,7 @@
 (define web-upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
 (define web-upload-metadata-mapping
   (lambda (key)
-    (if (regexp-match? #rx"[.](?:css|js|png|jpe?g|gif|svg|ico)$" key)
+    (if (regexp-match? #rx"[.](?:css|js|png|jpe?g|gif|svg|ico|woff)$" key)
         ;; Cache for one year:
         (hash 'Cache-Control "max-age=31536000, public")
         (hash))))

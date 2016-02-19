@@ -132,7 +132,7 @@ The following options (supply them after @exec{s3-sync} and before
        and @exec{Content-Cache} @exec{"max-age=31536000, public"} metadata
        for files with the following suffixes: @filepath{.css}, @filepath{.js},
        @filepath{.png}, @filepath{.jpg}, @filepath{.jpeg}, @filepath{.gif},
-       @filepath{.svg}, or @filepath{.ico}.}
+       @filepath{.svg}, @filepath{.ico}, or @filepath{.woff}.}
 
 ]
 
@@ -399,9 +399,11 @@ Default metadata for web content, currently @racket[(hash
 Item-specific metadata for web content, currently produces @racket[(hash
 'Cache-Control "max-age=31536000, public")] for a @racket[item]
 that ends in @filepath{.css}, @filepath{.js}, @filepath{.png}, @filepath{.jpg},
-@filepath{.jpeg}, @filepath{.gif}, @filepath{.svg}, or @filepath{.ico}.
+@filepath{.jpeg}, @filepath{.gif}, @filepath{.svg}, @filepath{.ico},
+or @filepath{.woff}.
 
-@history[#:added "1.7"]}
+@history[#:added "1.7"
+         #:changed "1.8" @elem{Added @filepath{.woff}.}]}
 
 
 @defthing[web-gzip-rx regexp?]{
