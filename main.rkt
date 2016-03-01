@@ -15,7 +15,8 @@
          http/head
          http/request
          xml
-         raco/command-name)
+         raco/command-name
+         "routing-rule.rkt")
 
 (provide s3-sync)
 
@@ -762,10 +763,11 @@
                        #:when (and (included? (in-sub f))
                                    (link-exists? f)))
               (define rel-dest (link->dest f))
-              (cons (path->string (if sub (build-path sub f) f))
-                    (path->string (if sub (build-path sub rel-dest) rel-dest))))))
+              (redirect-prefix-routing-rule
+               #:old-prefix (path->string (if sub (build-path sub f) f))
+               #:new-prefix (path->string (if sub (build-path sub rel-dest) rel-dest))))))
         (unless (null? link-content)
-          (add-links bucket link-content log-info error))))))
+          (add-routing-rules bucket link-content #:log-info log-info #:error error))))))
 
 (define (put-file-via-bytes dest fn call-with-file-stream mime-type heads)
   (define s (put/bytes dest 
@@ -802,87 +804,8 @@
 		   heads))
   ;; How do we check s?
   #f)
-  
 
-;; add-links : string (listof (cons/c src dest))
-(define (add-links bucket links log-info error)
-  (define bstr (get/bytes (~a bucket "/?website")))
-
-  (define config-doc
-    (read-xml (open-input-bytes bstr)))
-  (define config (document-element config-doc))
-  (unless (eq? (element-name config) 'WebsiteConfiguration)
-    (error 's3-sync "not a WebsiteConfiguration"))
-
-  (define (find-sub name e)
-    (for/or ([c (element-content e)])
-      (and (element? c)
-           (eq? name (element-name c))
-           c)))
-  
-  (define (replace e name sub-e)
-    (struct-copy element e
-                 [content 
-                  (if (find-sub name e)
-                      (for/list ([c (in-list (element-content e))])
-                        (if (and (element? c)
-                                 (eq? (element-name c) name))
-                            sub-e
-                            c))
-                      (append (element-content e)
-                              (list sub-e)))]))
-
-  (define (content-string e)
-    (cond
-     [(pcdata? e) (pcdata-string e)]
-     [(element? e) (apply string-append
-                          (map content-string (element-content e)))]
-     [else ""]))
-  
-  (define (elem name . content)
-    (make-element #f #f name null content))
-  
-  (define routing
-    (or (find-sub 'RoutingRules config)
-        (make-element #f #f 'RoutingRules null null)))
-  
-  (define (add-rule routing prefix replacement)
-    (struct-copy element routing
-                 [content
-                  (append
-                   (for/list ([r (in-list (element-content routing))]
-                              #:unless (and (element? r)
-                                            (eq? 'RoutingRule (element-name r))
-                                            (let ([c (find-sub 'Condition r)])
-                                              (or (not c)
-                                                  (let ([p (find-sub 'KeyPrefixEquals c)])
-                                                    (or (not p)
-                                                        (equal? (content-string p) prefix)))))))
-                     r)
-                   (list
-                    (elem 'RoutingRule
-                          (elem 'Condition 
-                                (elem 'KeyPrefixEquals
-                                      (pcdata #f #f prefix)))
-                          (elem 'Redirect
-                                (elem 'ReplaceKeyPrefixWith
-                                      (pcdata #f #f replacement))))))]))
-  
-  (define o (open-output-bytes))
-  (write-xml
-   (struct-copy document config-doc
-                [element (replace config 'RoutingRules 
-                                  (for/fold ([routing routing]) ([link (in-list links)])
-                                    (add-rule routing (car link) (cdr link))))])
-   o)
-
-  (log-info "Updating redirection rules")
-
-  (define resp
-    (put/bytes (~a bucket "/?website") (get-output-bytes o) "application/octet-stream"))
-  (unless (member (extract-http-code resp) '(200))
-    (error 's3-sync "redirection-rules update failed")))
-
+;; ----------------------------------------
 
 (module+ main
   (require "web-config.rkt"

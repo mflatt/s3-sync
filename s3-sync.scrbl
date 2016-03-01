@@ -6,6 +6,7 @@
                      s3-sync/gzip
                      s3-sync/web
                      s3-sync/web-config
+                     s3-sync/routing-rule
                      aws/s3
                      aws/keys))
 
@@ -416,3 +417,37 @@ Default regexp for paths to be @exec{gzip}ped, currently
 
 Default minimum size for files to be @exec{gzip}ped, currently
 @racket[#rx"[.](html|css|js)$"].}
+
+@; ------------------------------------------------------------
+@section{S3 Routing Rules}
+
+@defmodule[s3-sync/routing-rule]
+
+@history[#:added "1.9"]
+
+@defproc[(add-routing-rules [bucket string?]
+                            [rules (listof routing-rule?)]
+                            [#:preserve-existing? preserve-existing? any/c #t]
+                            [#:log-info log-info-proc (lambda (s) (log-info s))]
+                            [#:error error-proc error])
+         void?]{
+
+Configures the web-site routing rules at @racket[bucket] to include
+each of the routing rules in @racket[rules]. Unless
+@racket[preserve-existing?] is false, existing routing rules are
+preserved except as overridden by @racket[rules].}
+
+@defproc[(redirect-prefix-routing-rule [#:old-prefix prefix string?]
+                                       [#:new-prefix new-prefix (or/c string? #f) #f]
+                                       [#:new-host new-host (or/c string?) #f])
+         routing-rule?]{
+
+Creates a routing rule that redirects an access with a prefix matching
+@racket[prefix] so that the prefix is replaced by @racket[new-prefix],
+the access is redirected to @racket[new-host], or both. At least one
+of @racket[new-prefix] or @racket[new-host] must be non-@racket[#f].}
+
+@defproc[(routing-rule? [v any/c]) boolean?]{
+
+Returns @racket[#t] if @racket[v] is a routing rule as created by
+@racket[redirect-prefix-routing-rule], @racket[#f] otherwise.}
