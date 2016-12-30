@@ -439,13 +439,16 @@ preserved except as overridden by @racket[rules].}
 
 @defproc[(redirect-prefix-routing-rule [#:old-prefix prefix string?]
                                        [#:new-prefix new-prefix (or/c string? #f) #f]
-                                       [#:new-host new-host (or/c string?) #f])
+                                       [#:new-host new-host (or/c string? #f) #f]
+                                       [#:redirect-code redirect-code (or/c string? #f) #f])
          routing-rule?]{
 
 Creates a routing rule that redirects an access with a prefix matching
 @racket[prefix] so that the prefix is replaced by @racket[new-prefix],
 the access is redirected to @racket[new-host], or both. At least one
-of @racket[new-prefix] or @racket[new-host] must be non-@racket[#f].}
+of @racket[new-prefix] or @racket[new-host] must be non-@racket[#f].
+
+@history[#:changed "1.10" @elem{Added @racket[#:redirect-code] argument.}]}
 
 @defproc[(routing-rule? [v any/c]) boolean?]{
 
