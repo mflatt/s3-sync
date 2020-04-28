@@ -962,7 +962,9 @@
                     #f
                     s)))))
 
-  (ensure-have-keys)
+  (with-handlers ([exn:fail? (lambda _ (ensure-have-keys))])
+    (credentials-from-environment!))
+
   (s3-host s3-hostname)
 
   (s3-region
