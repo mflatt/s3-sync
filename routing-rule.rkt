@@ -14,14 +14,18 @@
 (define (redirect-prefix-routing-rule #:old-prefix prefix
                                       #:new-prefix [new-prefix #f]
                                       #:new-host [new-host #f]
+                                      #:new-protocol [new-protocol #f]
                                       #:redirect-code [redirect-code #f])
   (unless (or new-prefix new-host)
     (error 'redirect-prefix-routing-rule
-           "newment prefix or newment host required"))
+           "new prefix or new host required"))
+  (unless (memq new-protocol '(#f http https))
+    (error 'redirect-prefix-routing-rule "bad protocol: ~e" new-protocol))
   (routing-rule (hash 'old-prefix prefix
                       'new-prefix new-prefix
                       'new-host new-host
-                      'redirect-code redirect-code)))
+                      'redirect-code redirect-code
+                      'protocol new-protocol)))
 
 ;; add-routing-rules : string (listof routing-rule) ...
 (define (add-routing-rules bucket links
@@ -68,7 +72,7 @@
     (or (find-sub 'RoutingRules config)
         (make-element #f #f 'RoutingRules null null)))
   
-  (define (add-rule routing prefix replacement replacement-host redirect-code)
+  (define (add-rule routing prefix replacement replacement-host redirect-code protocol)
     (struct-copy element routing
                  [content
                   (append
@@ -103,6 +107,11 @@
                                       (list
                                        (elem 'HttpRedirectCode
                                              (pcdata #f #f redirect-code)))
+                                      null)
+                                  (if protocol
+                                      (list
+                                       (elem 'Protocol
+                                             (pcdata #f #f (symbol->string protocol))))
                                       null))))))]))
   
   (define o (open-output-bytes))
@@ -115,7 +124,8 @@
                                               (hash-ref ht 'old-prefix)
                                               (hash-ref ht 'new-prefix #f)
                                               (hash-ref ht 'new-host #f)
-                                              (hash-ref ht 'redirect-code #f))))])
+                                              (hash-ref ht 'redirect-code #f)
+                                              (hash-ref ht 'protocol #f))))])
    o)
 
   (log-info "Updating redirection rules")
