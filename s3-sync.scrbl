@@ -61,7 +61,8 @@ The following options (supply them after @exec{s3-sync} and before
        subdirectories); in both upload and download modes, extract the
        current bucket state in a directory-like way (which is useful
        if the bucket contains many more nested items than the local
-       filesystem)}
+       filesystem); when uploading, shallow mode is enabled by default
+       unless @DFlag{delete} is specified}
 
  @item{@DFlag{delete} --- delete destination items that have no
        corresponding source item.}
@@ -137,6 +138,8 @@ The following options (supply them after @exec{s3-sync} and before
 
 ]
 
+@history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}]
+
 @section{S3 Synchronization API}
 
 @defmodule[s3-sync]
@@ -150,7 +153,7 @@ before calling @racket[s3-sync].
                   [s3-path (or/c #f string?)]
                   [#:upload? upload? any/c #t]
                   [#:jobs jobs inexact-positive-integer? 1]
-                  [#:shallow? shallow? any/c #f]
+                  [#:shallow? shallow? any/c (and upload? (not delete?))]
                   [#:check-metadata? check-metadata? any/c #f]
                   [#:dry-run? dry-run? any/c #f]
                   [#:delete? delete? any/c #f]
@@ -321,7 +324,8 @@ level to a logger whose name is @racket['s3-sync].
                                and a bucket item name as @racket[s3-path].}
          #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}
          #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}
-         #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}]}
+         #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}
+         #:changed "1.12" @elem{Changed default @racket[shallow?] to @racket[(and upload? (not delete?))].}]}
 
 
 @; ------------------------------------------------------------

@@ -74,7 +74,7 @@
                  #:error [error error]
                  #:dry-run? [dry-run? #f]
                  #:delete? [delete? #f]
-                 #:shallow? [shallow? #f]
+                 #:shallow? [shallow? (and upload? (not delete?))]
                  #:check-metadata? [check-metadata? #f]
                  #:jobs [jobs 1]
                  #:include [include-rx #f]
@@ -89,7 +89,7 @@
                  #:link-mode [link-mode 'error]
                  #:log [log-info (lambda (s)
                                    (log-s3-sync-info s))])
-  
+
   (define sub-is-dir? (or (not given-sub)
                           (regexp-match? #rx"/$" given-sub)))
   
@@ -979,7 +979,7 @@
   (s3-sync local-dir
            s3-bucket
            s3-sub
-           #:shallow? shallow?
+           #:shallow? (or shallow? (and upload? (not delete?)))
            #:upload? upload?
            #:check-metadata? check-metadata?
            #:acl s3-acl
