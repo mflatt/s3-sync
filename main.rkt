@@ -164,19 +164,24 @@
                        ht)])
           (merge-hash ht upload-metadata)))
 
+      (define (ensure-not-path s)
+        (when (path? s) (error 's3-sync "internal error: should be a string: ~s" s)))
+
       (define (included? s)
-        (let ([s (if (path? s)
-                     ;; Force unix-style path:
-                     (string-join (map path->string (explode-path s)) "/")
-                     s)])
-          (and (or (not include-rx)
-                   (regexp-match? include-rx s))
-               (or (not exclude-rx)
-                   (not (regexp-match? exclude-rx s))))))
+        (ensure-not-path s)
+        (and (or (not include-rx)
+                 (regexp-match? include-rx s))
+             (or (not exclude-rx)
+                 (not (regexp-match? exclude-rx s)))))
 
       (define (in-sub f [sub sub])
-        ;; relies on item names matching path syntax:
-        (path->string (if sub (build-path sub f) f)))
+        (ensure-not-path sub)
+        (define fs (if (path? f)
+                       (path-element->string f)
+                       f))
+        (if sub
+            (string-append sub "/" fs)
+            fs))
 
       (define (check-link-exists f)
         (if (link-exists? f)
@@ -511,10 +516,9 @@
                  raw-dest))
         rel-dest)
 
-      (define (f->key f)
-        (~a (if sub (~a (encode-path sub) "/") "")
-            (encode-path (string-join (map path-element->string (explode-path f))
-                                      "/"))))
+      (define (slashify f)
+        (string-join (map path-element->string (explode-path f))
+                      "/"))
       
       (define (b+k key)
         (~a bucket "/" key))
@@ -529,7 +533,7 @@
                       (error 's3-sync "internal error: bad prefix on key"))
                     (substring key (add1 len))]
                    [else key]))
-        (apply build-path (string-split p "/")))
+        (apply build-path (map string->path-element (string-split p "/"))))
 
       (define (maybe-upload f key in-link)
         (define old (hash-ref remote-content key #f))
@@ -599,12 +603,7 @@
                       (define rel-path
                         (string-append
                          "/"
-                         (encode-path (string-join (map path-element->string
-                                                        (explode-path
-                                                         (if sub
-                                                             (build-path sub in-link)
-                                                             in-link)))
-                                                   "/"))))
+                         (encode-path (in-sub (slashify in-link)))))
                       (hash-set do-upload-props 'x-amz-website-redirect-location rel-path)]
                      [else
                       do-upload-props])))
@@ -621,7 +620,7 @@
           (if (file-exists? fn)
               (let ([key (or (and sub-file
                                   clean-sub)
-                             (f->key src-file))])
+                             (in-sub (slashify src-file)))])
                 (maybe-upload fn key #f)
                 (set key))
               (set))]
@@ -631,12 +630,12 @@
           (set)]
          [else
           (parameterize ([current-directory src-dir])
-            (let loop ([f #f] [in-link #f] [result (set)])
+            (let loop ([f #f] [f-key #f] [in-link #f] [result (set)])
               (cond
                [(not f)
                 (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
-                  (loop s #f result))]
-               [(not (and (or (included? (in-sub f))
+                  (loop s (path-element->string s) #f result))]
+               [(not (and (or (included? (in-sub f-key))
                               (directory-exists? f))
                           (case link-mode
                             [(follow redirects) #t]
@@ -646,14 +645,15 @@
                [(and (not in-link)
                      (eq? link-mode 'redirects)
                      (link-exists? f))
-                (loop f (link->dest f) result)]
+                (loop f f-key (link->dest f) result)]
                [(directory-exists? f)
                 (for/fold ([result result]) ([s (filter use-src-dir? (directory-list f))])
                   (loop (build-path f s)
+                        (in-sub s f-key)
                         (and in-link (build-path in-link s))
                         result))]
                [(file-exists? f)
-                (define key (in-sub f))
+                (define key (in-sub f-key))
                 (maybe-upload f key in-link)
                 (set-add result key)]
                [else
@@ -764,8 +764,8 @@
                                    (link-exists? f)))
               (define rel-dest (link->dest f))
               (redirect-prefix-routing-rule
-               #:old-prefix (path->string (if sub (build-path sub f) f))
-               #:new-prefix (path->string (if sub (build-path sub rel-dest) rel-dest))))))
+               #:old-prefix (in-sub f)
+               #:new-prefix (in-sub (slashify rel-dest))))))
         (unless (null? link-content)
           (add-routing-rules bucket link-content #:log-info log-info #:error error))))))
 
