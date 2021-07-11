@@ -25,6 +25,8 @@
 (unless bucket
   (printf "skipping s3-sync tests; could not find `test/bucket' entry in: ~a\n" data-file))
 
+(define skip-links? #f) ; or maybe (eq? (system-type) 'windows), since links are not always enabled
+
 (when bucket
   (define bucket/ (~a bucket "/"))
   (define dir (make-temporary-file "s3-sync-~a" 'directory))
@@ -187,51 +189,56 @@
     (check-equal? (file-content "z@test.css") "No one tries")
     (check-equal? (file-content "like_y_test") (file-content "y_test"))
 
-    (unless (eq? (system-type) 'windows)
-      (step "Error on links")
-      (create-link "z@test.css" "also_z_test")
-      (check-equal? 'as-expected
-                    (with-handlers ([exn:fail? (lambda (exn)
-                                                 (if (regexp-match? #rx"encountered soft link"
-                                                                    (exn-message exn))
-                                                     'as-expected
-                                                     exn))])
-                      (s3-sync dir bucket #f #:jobs jobs)))
-      
-      (step "Follow link")
-      (s3-sync dir bucket #f #:jobs jobs #:link-mode 'follow)
-      (check-equal? (ls bucket/) '("also_z_test" "like_y_test" "x_test" "y_test" "z@test.css"))
-      (remove-file "also_z_test")
-      (set! plan-count 0)
-      (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
-      (check-equal? plan-count 1)
-      (check-equal? (file-content "also_z_test") (file-content "z@test.css"))
+    (cond
+      [skip-links?
+       (remove-file "like_y_test")
+       (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
+       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))]
+      [else
+       (step "Error on links")
+       (create-link "z@test.css" "also_z_test")
+       (check-equal? 'as-expected
+                     (with-handlers ([exn:fail? (lambda (exn)
+                                                  (if (regexp-match? #rx"encountered soft link"
+                                                                     (exn-message exn))
+                                                      'as-expected
+                                                      exn))])
+                       (s3-sync dir bucket #f #:jobs jobs)))
 
-      (step "Redirect link")
-      (remove-file "also_z_test")
-      (create-link "z@test.css" "also_z_test")
-      (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
-      (check-equal? (get-link "also_z_test") (encode-path "/z@test.css"))
-      (remove-file "also_z_test")
-      (set! plan-count 0)
-      (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
-      (check-equal? plan-count 1)
-      (check-equal? (file-content "also_z_test") "")
-      (remove-file "also_z_test")
-      (remove-file "like_y_test")
+       (step "Follow link")
+       (s3-sync dir bucket #f #:jobs jobs #:link-mode 'follow)
+       (check-equal? (ls bucket/) '("also_z_test" "like_y_test" "x_test" "y_test" "z@test.css"))
+       (remove-file "also_z_test")
+       (set! plan-count 0)
+       (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
+       (check-equal? plan-count 1)
+       (check-equal? (file-content "also_z_test") (file-content "z@test.css"))
 
-      (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
-      (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
+       (step "Redirect link")
+       (remove-file "also_z_test")
+       (create-link "z@test.css" "also_z_test")
+       (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
+       (check-equal? (get-link "also_z_test") (encode-path "/z@test.css"))
+       (remove-file "also_z_test")
+       (set! plan-count 0)
+       (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
+       (check-equal? plan-count 1)
+       (check-equal? (file-content "also_z_test") "")
+       (remove-file "also_z_test")
+       (remove-file "like_y_test")
 
-      (step "Redirect directory link")
-      (create-dir "sub")
-      (create-link "../z@test.css" "sub/also_z_test")
-      (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
-      (check-equal? (get-link "sub/also_z_test") (encode-path "/z@test.css"))
-      (remove-all "sub")
-      
-      (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
-      (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css")))
+       (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
+       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
+
+       (step "Redirect directory link")
+       (create-dir "sub")
+       (create-link (build-path 'up "z@test.css") "sub/also_z_test")
+       (s3-sync dir bucket #f #:jobs jobs #:link-mode 'redirects)
+       (check-equal? (get-link "sub/also_z_test") (encode-path "/z@test.css"))
+       (remove-all "sub")
+
+       (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
+       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))])
 
     (step "Upload to specified prefix")
     (make-directory (build-path dir "sub"))
