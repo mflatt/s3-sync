@@ -200,6 +200,10 @@
           [(error) (check-link-exists dir)]
           [else #t]))
 
+      (define (slashify f)
+        (string-join (map path-element->string (explode-path f))
+                     "/"))
+
       (define local-directories
         (and shallow?
              (if (eq? src-kind 'directory)
@@ -208,7 +212,7 @@
                     (for/set ([f (in-directory #f use-src-dir?)]
                               #:when (and (directory-exists? f)
                                           (use-src-dir? f)))
-                      (in-sub f clean-sub))
+                      (in-sub (slashify f) clean-sub))
                     #f))
                  (set))))
 
@@ -515,10 +519,6 @@
                  f
                  raw-dest))
         rel-dest)
-
-      (define (slashify f)
-        (string-join (map path-element->string (explode-path f))
-                      "/"))
       
       (define (b+k key)
         (~a bucket "/" key))
