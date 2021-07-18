@@ -760,11 +760,11 @@
           (parameterize ([current-directory src-dir])
             (for/list ([f (in-directory #f (lambda (dir)
                                              (not (link-exists? dir))))]
-                       #:when (and (included? (in-sub f))
+                       #:when (and (included? (in-sub (slashify f)))
                                    (link-exists? f)))
               (define rel-dest (link->dest f))
               (redirect-prefix-routing-rule
-               #:old-prefix (in-sub f)
+               #:old-prefix (in-sub (slashify f))
                #:new-prefix (in-sub (slashify rel-dest))))))
         (unless (null? link-content)
           (add-routing-rules bucket link-content #:log-info log-info #:error error))))))
