@@ -303,11 +303,13 @@ in @racket[local-path]:
        file or directory)}
 
  @item{@racket['redirect] --- treat it as a redirection rule to be
-       installed for @racket[s3-bucket] as a web site on upload}
+       installed for @racket[s3-bucket] as a web site on upload; the target of the
+       link does not have to exist locally}
 
  @item{@racket['redirects] --- treat it as a redirection rule to be
        installed for @racket[s3-bucket]'s item as metadata on upload,
-       while the item itself is uploaded as empty}
+       while the item itself is uploaded as empty; the target of the
+       link does not have to exist locally}
 
  @item{@racket['ignore] --- ignore}
 
@@ -325,7 +327,8 @@ level to a logger whose name is @racket['s3-sync].
          #:changed "1.5" @elem{Added the @racket[check-metadata?] argument.}
          #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}
          #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}
-         #:changed "1.12" @elem{Changed default @racket[shallow?] to @racket[(and upload? (not delete?))].}]}
+         #:changed "1.12" @elem{Changed default @racket[shallow?] to @racket[(and upload? (not delete?))].}
+         #:changed "1.13" @elem{Changed @racket['redirects] for @racket[link-mode] to allow a locally non-existent target.}]}
 
 
 @; ------------------------------------------------------------

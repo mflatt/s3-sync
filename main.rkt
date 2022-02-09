@@ -48,7 +48,7 @@
 
 (define (file-md5 f call-with-file-stream)
   (cond
-   [((file-size f) . > . MULTIPART-THRESHOLD)
+   [(and f ((file-size f) . > . MULTIPART-THRESHOLD))
     (define buffer (make-bytes CHUNK-SIZE))
     (define-values (i o) (make-pipe))
     (define n 
@@ -541,7 +541,7 @@
                                           (lambda (f p) (p (open-input-bytes #"")))
                                           (and make-call-with-file-stream
                                                (make-call-with-file-stream key f))))
-        (define new (file-md5 f (or call-with-file-stream call-with-input-file*)))
+        (define new (file-md5 (and (not in-link) f) (or call-with-file-stream call-with-input-file*)))
         (cond
          [(and (equal? old new)
                (not (and upload? check-metadata?)))
@@ -652,7 +652,10 @@
                         (in-sub s f-key)
                         (and in-link (build-path in-link s))
                         result))]
-               [(file-exists? f)
+               [(or (file-exists? f)
+                    ;; the target of a link doesn't have to exist
+                    (and in-link
+                         (eq? link-mode 'redirects)))
                 (define key (in-sub f-key))
                 (maybe-upload f key in-link)
                 (set-add result key)]
