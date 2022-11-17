@@ -233,7 +233,7 @@ that would be uploaded, and the bucket item's metadata is adjust if
 not.
 
 If @racket[dry-run?] is true, then actions needed for synchronization
-are reported via @racket[log], but no uploads, downloads, deletions,
+are reported via @racket[log-info], but no uploads, downloads, deletions,
 or redirection-rule updates are performed.
 
 If @racket[jobs] is more than @racket[1], then downloads and uploads
