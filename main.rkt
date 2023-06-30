@@ -31,6 +31,7 @@
     [(#"svg") "image/svg+xml"]
     [(#"js") "text/javascript"]
     [(#"css") "text/css"]
+    [(#"xml") "application/xml"]
     [else "application/octet-stream"]))
 
 (define (encode-path p)
