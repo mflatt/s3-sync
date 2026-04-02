@@ -56,6 +56,9 @@ The following options (supply them after @exec{s3-sync} and before
  @item{@DFlag{jobs} @nonterm{n} or @Flag{j} @nonterm{n} --- perform up
        to @nonterm{n} downloads or uploads in parallel.}
 
+ @item{@DFlag{retries} @nonterm{n} --- retries operations up to
+       @nonterm{n} additional times.}
+
  @item{@DFlag{shallow} --- when downloading, constrain downloads to
        existing directories at @nonterm{dest} (i.e., no additional
        subdirectories); in both upload and download modes, extract the
@@ -138,7 +141,8 @@ The following options (supply them after @exec{s3-sync} and before
 
 ]
 
-@history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}]
+@history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}
+         #:changed "1.14" @elem{Added the @DFlag{retries} option.}]
 
 @section{S3 Synchronization API}
 
@@ -153,6 +157,7 @@ before calling @racket[s3-sync].
                   [s3-path (or/c #f string?)]
                   [#:upload? upload? any/c #t]
                   [#:jobs jobs inexact-positive-integer? 1]
+                  [#:retries retries inexact-nonnegative-integer? 0]
                   [#:shallow? shallow? any/c (and upload? (not delete?))]
                   [#:check-metadata? check-metadata? any/c #f]
                   [#:dry-run? dry-run? any/c #f]
@@ -238,6 +243,9 @@ or redirection-rule updates are performed.
 
 If @racket[jobs] is more than @racket[1], then downloads and uploads
 proceed in background threads.
+
+If @racket[retries] is more than @racket[0], then operations may be
+retried up to @racket[retries] times on errors.
 
 If @racket[delete?] is true, then destination items that have no
 corresponding item at the source are deleted.
@@ -328,7 +336,8 @@ level to a logger whose name is @racket['s3-sync].
          #:changed "1.6" @elem{Added the @racket[upload-metadata-mapping] argument.}
          #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}
          #:changed "1.12" @elem{Changed default @racket[shallow?] to @racket[(and upload? (not delete?))].}
-         #:changed "1.13" @elem{Changed @racket['redirects] for @racket[link-mode] to allow a locally non-existent target.}]}
+         #:changed "1.13" @elem{Changed @racket['redirects] for @racket[link-mode] to allow a locally non-existent target.}
+         #:changed "1.14" @elem{Added the @racket[retries] argument.}]}
 
 
 @; ------------------------------------------------------------

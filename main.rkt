@@ -78,6 +78,7 @@
                  #:shallow? [shallow? (and upload? (not delete?))]
                  #:check-metadata? [check-metadata? #f]
                  #:jobs [jobs 1]
+                 #:retries [retries 0]
                  #:include [include-rx #f]
                  #:exclude [exclude-rx #f]
                  #:make-call-with-input-file [make-call-with-file-stream #f]
@@ -427,6 +428,17 @@
                          #t)
               (semaphore-post go))))
 
+      (define (retryable proc)
+        (lambda ()
+          (let loop ([retries retries] [delay 0.01])
+            (cond
+              [(zero? retries) (proc)]
+              [else
+               (with-handlers* ([exn:fail (lambda (exn)
+                                            (sleep delay)
+                                            (loop (sub1 retries) (* delay 2)))])
+                 (proc))]))))
+
       (define (download what key f)
         (define task-id (get-task-id))
         (log-info (format "Download ~a: ~a~a" what (format-to key f) (task-id-str task-id)))
@@ -436,10 +448,11 @@
               (make-directory* base)))
           (task!
            task-id
-           (lambda ()
-             (get/file (b+k (encode-path key))
-                       f
-                       #:exists 'truncate/replace)))))
+           (retryable
+            (lambda ()
+              (get/file (b+k (encode-path key))
+                        f
+                        #:exists 'truncate/replace))))))
 
       ;; Accumulates upload items that need metadat checking:
       (define check-metadata null)      
@@ -451,11 +464,12 @@
         (log-info (format "Download metadata: ~a~a" (format-to key f) (task-id-str task-id)))
         (task!
          task-id
-         (lambda ()
-           (define p (b+k (encode-path key)))
-           (define h (head p))
-           (define acl (and acl? (get-acl p)))
-           (hash-set! header-store key (list h acl)))))
+         (retryable
+          (lambda ()
+            (define p (b+k (encode-path key)))
+            (define h (head p))
+            (define acl (and acl? (get-acl p)))
+            (hash-set! header-store key (list h acl))))))
       
       (define (extract-canned-acl acl bucket-acl props)
         (define (get-owner acl)
@@ -589,27 +603,28 @@
             (unless dry-run?
               (task!
                task-id
-               (lambda ()
-                 (define s
-                   ((if (and (not in-link)
-                             ((file-size f) . > . MULTIPART-THRESHOLD))
-                        multipart-put-file-via-bytes
-                        put-file-via-bytes)
-                    (b+k (encode-path key))
-                    f
-                    call-with-file-stream
-                    (or content-type "application/octet-stream")
-                    (cond
-                     [in-link
-                      (define rel-path
-                        (string-append
-                         "/"
-                         (encode-path (in-sub (slashify in-link)))))
-                      (hash-set do-upload-props 'x-amz-website-redirect-location rel-path)]
-                     [else
-                      do-upload-props])))
-                 (when s
-                   (failure "put" f s)))))])]
+               (retryable
+                (lambda ()
+                  (define s
+                    ((if (and (not in-link)
+                              ((file-size f) . > . MULTIPART-THRESHOLD))
+                         multipart-put-file-via-bytes
+                         put-file-via-bytes)
+                     (b+k (encode-path key))
+                     f
+                     call-with-file-stream
+                     (or content-type "application/octet-stream")
+                     (cond
+                       [in-link
+                        (define rel-path
+                          (string-append
+                           "/"
+                           (encode-path (in-sub (slashify in-link)))))
+                        (hash-set do-upload-props 'x-amz-website-redirect-location rel-path)]
+                       [else
+                        do-upload-props])))
+                  (when s
+                    (failure "put" f s))))))])]
          [old
           (download "changed" key f)]))
       
@@ -704,17 +719,18 @@
             (unless dry-run?
               (task!
                task-id
-               (lambda ()
-                 ;; If only the ACL changes, we need to use `put-acl`,
-                 ;; otherwise we can use `copy`:
-                 (cond
-                  [same-other-props?
-                   (put-acl (b+k (encode-path key)) #f (hash 'x-amz-acl upload-acl))]
-                  [else
-                   (copy (b+k key)
-                         (b+k (encode-path key))
-                         (hash-set upload-props
-                                   'x-amz-metadata-directive "REPLACE"))]))))))
+               (retryable
+                (lambda ()
+                  ;; If only the ACL changes, we need to use `put-acl`,
+                  ;; otherwise we can use `copy`:
+                  (cond
+                    [same-other-props?
+                     (put-acl (b+k (encode-path key)) #f (hash 'x-amz-acl upload-acl))]
+                    [else
+                     (copy (b+k key)
+                           (b+k (encode-path key))
+                           (hash-set upload-props
+                                     'x-amz-metadata-directive "REPLACE"))])))))))
         (sync-tasks))
 
       (when download?
@@ -820,6 +836,7 @@
 
   (define dry-run? #f)
   (define jobs 1)
+  (define retries 0)
   (define shallow? #f)
   (define delete? #f)
   (define check-metadata? #f)
@@ -858,6 +875,11 @@
       (unless (exact-positive-integer? j)
         (raise-user-error 's3-sync "bad number: ~a" n))
       (set! jobs j)]
+     [("--retries") n "Retry up to <n> additional times on failure"
+      (define r (string->number n))
+      (unless (exact-nonnegative-integer? r)
+        (raise-user-error 's3-sync "bad number: ~a" n))
+      (set! retries r)]
      [("--shallow") "Constrain to existing <src> directories"
       (set! shallow? #t)]
      [("--delete") "Remove files in destination with no source"
@@ -999,4 +1021,5 @@
            #:link-mode link-mode
            #:delete? delete?
            #:dry-run? dry-run?
-           #:jobs jobs))
+           #:jobs jobs
+           #:retries retries))

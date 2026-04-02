@@ -79,7 +79,7 @@
             (if (= jobs 1) "" "s"))
 
     (step "Initialize test bucket to empty")
-    (s3-sync dir bucket #f #:delete? #t #:jobs jobs)
+    (s3-sync dir bucket #f #:delete? #t #:jobs jobs #:retries 10)
     (check-equal? (ls bucket/) '())
 
     (create-file "x_test" "Wish I was ocean size")
@@ -93,7 +93,7 @@
         (set! plan-count (add1 plan-count))))
 
     (step "Dry run of upload")
-    (s3-sync dir bucket #f #:dry-run? #t #:log count-planned #:jobs jobs)
+    (s3-sync dir bucket #f #:dry-run? #t #:log count-planned #:jobs jobs #:retries 10)
     (check-equal? plan-count 3)
     (check-equal? (ls bucket/) '())
 
