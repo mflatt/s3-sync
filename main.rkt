@@ -434,9 +434,9 @@
             (cond
               [(zero? retries) (proc)]
               [else
-               (with-handlers* ([exn:fail (lambda (exn)
-                                            (sleep delay)
-                                            (loop (sub1 retries) (* delay 2)))])
+               (with-handlers* ([exn:fail? (lambda (exn)
+                                             (sleep delay)
+                                             (loop (sub1 retries) (* delay 2)))])
                  (proc))]))))
 
       (define (download what key f)
