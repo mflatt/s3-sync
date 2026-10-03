@@ -346,7 +346,7 @@
           (define l (string-split clean-sub "/"))
           (values (if (= 1 (length l))
                       #f
-                      (string-join (drop-right l) "/"))
+                      (string-join (drop-right l 1) "/"))
                   (last l))]
          [else
           (values clean-sub #f)]))
