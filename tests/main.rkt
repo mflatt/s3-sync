@@ -110,6 +110,16 @@
     (s3-sync dir bucket #f #:upload? #f #:delete? #t #:log count-planned #:jobs jobs)
     (check-equal? plan-count 0)
 
+    (step "Upload a file in a subdirectory and then remove it")
+    (create-dir "no-one")
+    (create-file (build-path "no-one" "w_test") "pulls you out from your hole")
+    (s3-sync (build-path dir "no-one" "w_test") bucket "no-one/w_test" #:log count-planned #:jobs jobs)
+    (check-equal? plan-count 1)
+    (remove-file (build-path "no-one" "w_test"))
+    (set! plan-count 0)
+    (s3-sync (build-path dir "no-one") bucket "no-one" #:delete? #t #:log count-planned #:jobs jobs)
+    (check-equal? plan-count 0)
+
     (step "Upload changed files")
     (create-file "x_test" "No one pulls you")
     (create-file "y_test" "Out from your hole")
