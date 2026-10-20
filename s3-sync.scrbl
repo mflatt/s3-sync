@@ -148,12 +148,16 @@ The following options (supply them after @exec{s3-sync} and before
        @filepath{.png}, @filepath{.jpg}, @filepath{.jpeg}, @filepath{.gif},
        @filepath{.svg}, @filepath{.ico}, or @filepath{.woff}.}
 
+ @item{@DFlag{web-no-acl} --- like @DFlag{web}, but without setting
+       @tt{public-read} access}
+
 ]
 
 @history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}
          #:changed "1.14" @elem{Added the @DFlag{retries} option.}
          #:changed "1.15" @elem{Changed the default connection mode to HTTPS and
-                                added the @DFlag{http}, @DFlag{https}, and @DFlag{redirect-to-prefix} options.}]
+                                added the @DFlag{http}, @DFlag{https}, @DFlag{redirect-to-prefix},
+                                and @DFlag{web-no-acl} options.}]
 
 @section{S3 Synchronization API}
 

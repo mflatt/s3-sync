@@ -917,6 +917,18 @@
                                                    (exn-message exn)))])
       (pregexp rx)))
 
+  (define (web-defaults)
+    (set! reduced-redundancy? #t)
+    (unless gzip-rx (set! gzip-rx web-gzip-rx))
+    (when (= -1 gzip-size) (set! gzip-size web-gzip-min-size))
+    (set! upload-metadata
+          (merge-hash web-upload-metadata upload-metadata))
+    (set! upload-metadata-mapping-proc
+          (let ([proc upload-metadata-mapping-proc])
+            (lambda (key)
+              (merge-hash (proc key)
+                          (web-upload-metadata-mapping key))))))
+
   (define-values (src dest)
     (command-line
      #:program (short-program+command-name)
@@ -1000,19 +1012,12 @@
       (set! link-mode 'follow)]
      [("--ignore-links") "Ignore soft links"
       (set! link-mode 'ignore)]
-     #:once-each
+     #:once-any
      [("--web") "Set defaults suitable for web sites"
       (unless s3-acl (set! s3-acl "public-read"))
-      (set! reduced-redundancy? #t)
-      (unless gzip-rx (set! gzip-rx web-gzip-rx))
-      (when (= -1 gzip-size) (set! gzip-size web-gzip-min-size))
-      (set! upload-metadata
-            (merge-hash web-upload-metadata upload-metadata))
-      (set! upload-metadata-mapping-proc
-            (let ([proc upload-metadata-mapping-proc])
-              (lambda (key)
-                (merge-hash (proc key)
-                            (web-upload-metadata-mapping key)))))]
+      (web-defaults)]
+     [("--web-no-acl") "Like `--web` but without `--acl public-read`"
+      (web-defaults)]
      #:once-each
      [("--redirect-to-prefix") rx url "Redirect path matching <rx> to <url>"
       (set! redirect-as-link (web-make-redirect-download (check-regexp rx) (string->url url)))]
