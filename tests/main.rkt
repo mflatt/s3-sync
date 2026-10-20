@@ -17,24 +17,26 @@
 (define data-file (build-path (find-system-path 'home-dir)
                               ".aws-tests-data"))
 (define (get-test-data key)
-  (call-with-input-file*
-   data-file
-   (lambda (i)
-     (define want-profile (or (getenv "AWS_DEFAULT_PROFILE") "default"))
-     (let loop ([profile "default"])
-       (define l (read-line i))
-       (cond
-         [(eof-object? l) #f]
-         [(regexp-match #px"^[[]([a-zA-Z0-9_]*)[]]$" l)
-          => (lambda (m)
-               (loop (cadr m)))]
-         [(not (equal? profile want-profile)) (loop profile)]
-         [(regexp-match #px"^([a-z/]*)\\s+=\\s+([^\\s]*)\\s*$" l)
-          => (lambda (m)
-               (if (equal? key (cadr m))
-                   (caddr m)
-                   (loop profile)))]
-         [else (loop profile)])))))
+  (and
+   (file-exists? data-file)
+   (call-with-input-file*
+    data-file
+    (lambda (i)
+      (define want-profile (or (getenv "AWS_DEFAULT_PROFILE") "default"))
+      (let loop ([profile "default"])
+        (define l (read-line i))
+        (cond
+          [(eof-object? l) #f]
+          [(regexp-match #px"^[[]([a-zA-Z0-9_]*)[]]$" l)
+           => (lambda (m)
+                (loop (cadr m)))]
+          [(not (equal? profile want-profile)) (loop profile)]
+          [(regexp-match #px"^([a-z/]*)\\s+=\\s+([^\\s]*)\\s*$" l)
+           => (lambda (m)
+                (if (equal? key (cadr m))
+                    (caddr m)
+                    (loop profile)))]
+          [else (loop profile)]))))))
 
 (define bucket (get-test-data "test/bucket"))
 
@@ -47,11 +49,11 @@
 (define can-metadata? (equal? (or (get-test-data "test/metadata") "yes")
                               "yes"))
 
-(printf "Using ~a at ~a://~a\n" bucket use-s3-scheme use-s3-host)
-
 (define skip-links? #f) ; or maybe (eq? (system-type) 'windows), since links are not always enabled
 
 (when bucket
+  (printf "Using ~a at ~a://~a\n" bucket use-s3-scheme use-s3-host)
+
   (define bucket/ (~a bucket "/"))
   (define dir (make-temporary-file "s3-sync-~a" 'directory))
 
