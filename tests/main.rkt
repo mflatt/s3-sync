@@ -2,8 +2,10 @@
 (require s3-sync
          s3-sync/gzip
          s3-sync/web
+         s3-sync/web-config
          aws/keys
          aws/s3
+         net/url
          net/head
          net/uri-codec
          rackunit)
@@ -73,6 +75,15 @@
 
   (define step displayln)
 
+  (define plan-count 0)
+  (define download-plan-count 0)
+  (define (count-planned s)
+    (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z][_@]test(:?[.]css)?" s)
+      (log-error ">> ~a" s)
+      (set! plan-count (add1 plan-count))
+      (when (regexp-match? #rx"Download" s)
+        (set! download-plan-count (add1 download-plan-count )))))
+
   (define (go jobs)
     (printf "=== Testing with ~a parallel job~a ==\n"
             jobs
@@ -86,13 +97,8 @@
     (create-file "y_test" "They cannot move you")
     (create-file "z@test.css" "No one tries")
 
-    (define plan-count 0)
-    (define (count-planned s)
-      (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z][_@]test(:?[.]css)?" s)
-        (log-error ">> ~a" s)
-        (set! plan-count (add1 plan-count))))
-
     (step "Dry run of upload")
+    (set! plan-count 0)
     (s3-sync dir bucket #f #:dry-run? #t #:log count-planned #:jobs jobs #:retries 10)
     (check-equal? plan-count 3)
     (check-equal? (ls bucket/) '())
@@ -339,6 +345,11 @@
                     "sub/a_test" "sub/b_test"
                     "x_test" "y_test" "z@test.css"))
 
+    (step "Upload of already-there nested does nothing")
+    (set! plan-count 0)
+    (s3-sync (build-path dir "nested") bucket "nested" #:shallow? #t #:upload? #t #:log count-planned #:jobs jobs)
+    (check-equal? plan-count 0)
+
     (step "Upload to add subpath")
     (check-equal? (ls bucket/)
                   '("nested/a_test" "nested/b_test" "nested/x_test"
@@ -441,6 +452,49 @@
       (delete-directory/files f)))
 
   (web-go)
+
+  (define (redirect-go)
+    (step "Initialize test bucket to empty")
+    (s3-sync dir bucket #f #:delete? #t #:jobs 10 #:retries 10)
+    (check-equal? (ls bucket/) '())
+
+    (create-file "x_test" "Wish I was ocean size")
+    (create-link "x_test" "y_test")
+    (create-file "z_test" "No talking and all action")
+    (create-dir "sub")
+    (create-file "sub/a_test" "wave")
+    (create-link "sub" "n_test")
+
+    (step "Upload with redirects")
+    (set! plan-count 0)
+    (s3-sync dir bucket #f  #:log count-planned
+             #:link-mode 'redirects
+             #:redirect-as-link (web-make-redirect-download #rx"z_test|n_test"
+                                                            (string->url "https://racket-lang.org/test/")))
+    (check-equal? plan-count 5)
+    (check-equal? (ls bucket/) '("n_test" "sub/a_test" "x_test" "y_test" "z_test"))
+    (check-equal? (get-link "y_test") "/x_test")
+    (check-equal? (get-link "z_test") "https://racket-lang.org/test/z_test")
+    (check-equal? (get-link "n_test") "https://racket-lang.org/test/sub")
+
+    (step "Modify redirect")
+    (set! plan-count 0)
+    (set! download-plan-count 0)
+    (s3-sync dir bucket #f  #:log count-planned
+             #:link-mode 'redirects
+             #:redirect-as-link (web-make-redirect-download #rx"z_test|n_test"
+                                                            (string->url "https://racket-lang.org/test2/")))
+    (check-equal? plan-count 5)
+    (check-equal? (- plan-count download-plan-count) 2)
+    (check-equal? (get-link "y_test") "/x_test")
+    (check-equal? (get-link "z_test") "https://racket-lang.org/test2/z_test")
+    (check-equal? (get-link "n_test") "https://racket-lang.org/test2/sub")
+
+    (step "Empty local directory")
+    (for ([f (in-list (directory-list dir #:build? #t))])
+      (delete-directory/files f)))
+
+  (redirect-go)
 
   (step "Clean up local directory")
   (delete-directory/files dir)

@@ -2,6 +2,7 @@
 @(require scribble/bnf
           (for-label racket/base
                      racket/contract/base
+                     net/url
                      s3-sync
                      s3-sync/gzip
                      s3-sync/web
@@ -130,6 +131,11 @@ The following options (supply them after @exec{s3-sync} and before
        item, while the item itself is made empty (upload only).}
  @item{@DFlag{ignore-links} --- ignore soft links.}
 
+ @item{@DFlag{redirect-to-prefix} @nonterm{regexp} @nonterm{url} ---
+       treats a local path matching @nonterm{regexp} as a redirection for
+       upload, where the redirection goes to a local file's path added to
+       @nonterm{url} or a local link's resolution added to @nonterm{url}.}
+
  @item{@DFlag{web} --- sets defaults to @tt{public-read} access, reduced
        redundancy, compression for @filepath{.html}, @filepath{.css},
        @filepath{.js}, and @filepath{.svg} files that are 1K or larger,
@@ -142,7 +148,8 @@ The following options (supply them after @exec{s3-sync} and before
 ]
 
 @history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}
-         #:changed "1.14" @elem{Added the @DFlag{retries} option.}]
+         #:changed "1.14" @elem{Added the @DFlag{retries} option.}
+         #:changed "1.15" @elem{Added the @DFlag{redirect-to-prefix} option.}]
 
 @section{S3 Synchronization API}
 
@@ -194,6 +201,7 @@ before calling @racket[s3-sync].
                                                      immutable?))
                                              #hash()]
                   [#:link-mode link-mode (or/c 'error 'follow 'redirect 'redirects 'ignore) 'error]
+                  [#:redirect-as-link redirect-as-link (or/c #f (path-string? . -> . (or/c #f string? url?))) #f]
                   [#:log log-info (string . -> . void?) log-s3-sync-info]
                   [#:error raise-error (symbol? string? any/c ... . -> . any) error])
           void?]{
@@ -301,14 +309,16 @@ mapping from bucket item names to metadata that adds and overrides
 metadata for the specific item.
 
 The @racket[link-mode] argument determines the treatment of soft links
-in @racket[local-path]:
+in @racket[local-path] and redirections selected by @racket[redirect-as-link]:
 
 @itemlist[
 
- @item{@racket['error] --- reports an error}
+ @item{@racket['error] --- reports an error; @racket[redirect-as-link]
+       must be @racket[#f]}
 
  @item{@racket['follow] --- follows soft links (i.e., treat it as a
-       file or directory)}
+       file or directory); @racket[redirect-as-link]
+       must be @racket[#f]}
 
  @item{@racket['redirect] --- treat it as a redirection rule to be
        installed for @racket[s3-bucket] as a web site on upload; the target of the
@@ -319,9 +329,16 @@ in @racket[local-path]:
        while the item itself is uploaded as empty; the target of the
        link does not have to exist locally}
 
- @item{@racket['ignore] --- ignore}
+ @item{@racket['ignore] --- ignore; @racket[redirect-as-link]
+       must be @racket[#f]}
 
 ]
+
+If @racket[redirect-as-link] is not @racket[#f], it is applied to each
+candidate local path for upload. If it returns a string or URL, then
+the path is uploaded as a redirection to the returned relative or absolute
+URL. The @racket[link-mode] must be @racket['redirect] or
+@racket['redirects].
 
 The @racket[log-info] and @racket[raise-error] arguments determine how
 progress is logged and errors are reported. The default
@@ -337,7 +354,8 @@ level to a logger whose name is @racket['s3-sync].
          #:changed "1.7" @elem{Changed @racket[upload-metadata-mapping] to allow a procedure.}
          #:changed "1.12" @elem{Changed default @racket[shallow?] to @racket[(and upload? (not delete?))].}
          #:changed "1.13" @elem{Changed @racket['redirects] for @racket[link-mode] to allow a locally non-existent target.}
-         #:changed "1.14" @elem{Added the @racket[retries] argument.}]}
+         #:changed "1.14" @elem{Added the @racket[retries] argument.}
+         #:changed "1.15" @elem{Added the @racket[redirect-as-link] argument.}]}
 
 
 @; ------------------------------------------------------------
@@ -433,6 +451,16 @@ Default regexp for paths to be @exec{gzip}ped, currently
 
 Default minimum size for files to be @exec{gzip}ped, currently
 @racket[#rx"[.](html|css|js)$"].}
+
+@defproc[(web-make-redirect-download [rx regexp?] [dest-url url?])
+         (path-string? . -> . (or/c #f url?))]{
+
+Returns a procedure suitable for use as the @racket[#:redirect-as-link]
+argument to @racket[s3-sync].
+
+@history[#:added "1.15"]
+
+}
 
 @; ------------------------------------------------------------
 @section{S3 Routing Rules}

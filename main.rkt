@@ -89,9 +89,21 @@
                  #:upload-metadata-mapping [upload-metadata-mapping (hash)]
                  #:reduced-redundancy? [reduced-redundancy? #f]
                  #:link-mode [link-mode 'error]
+                 #:redirect-as-link [redirect-as-link #f]
                  #:log [log-info (lambda (s)
                                    (log-s3-sync-info s))])
 
+  (when redirect-as-link
+    (unless (memq link-mode '(redirect redirects))
+      (error 's3-sync "per-file redirects need `redirect` or `redirects` mode")))
+  (define redirect-link-cache (make-hash))
+  (define (redirect-as-link* f)
+    (hash-ref redirect-link-cache f
+              (lambda ()
+                (define r (redirect-as-link f))
+                (hash-set! redirect-link-cache f r)
+                r)))
+  
   (define sub-is-dir? (or (not given-sub)
                           (regexp-match? #rx"/$" given-sub)))
   
@@ -215,7 +227,7 @@
                               #:when (and (directory-exists? f)
                                           (use-src-dir? f)))
                       (in-sub (slashify f) clean-sub))
-                    #f))
+                    clean-sub))
                  (set))))
 
       (log-info "Getting current S3 content...")
@@ -371,7 +383,7 @@
                f
                s))
 
-      (define (format-to key f)
+      (define (format-to key f [in-link #f])
         (define key-s (~a key))
         (define f-s (~a f))
         (if (equal? key-s f-s)
@@ -516,24 +528,29 @@
 
       (define abs-src-dir (path->complete-path src-dir))
       (define (link->dest f)
-        (define raw-dest (resolve-path f))
-        (define dest (path->complete-path 
-                      raw-dest
-                      (let-values ([(base name dir?) (split-path f)])
-                        (if (eq? base 'relative)
-                            abs-src-dir
-                            (build-path abs-src-dir base)))))
-        (define rel-dest (find-relative-path (simplify-path abs-src-dir #f)
-                                             (simplify-path dest #f)))
-        (unless (and (relative-path? rel-dest)
-                     (not (memq 'up (explode-path rel-dest))))
-          (error 's3-sync
-                 (~a "link does not stay within directory\n"
-                     "  source path: ~a\n"
-                     "  destination path: ~a")
-                 f
-                 raw-dest))
-        rel-dest)
+        (cond
+          [(and redirect-as-link
+                (redirect-as-link* f))
+           => (lambda (dest) dest)]
+          [else
+           (define raw-dest (resolve-path f))
+           (define dest (path->complete-path 
+                         raw-dest
+                         (let-values ([(base name dir?) (split-path f)])
+                           (if (eq? base 'relative)
+                               abs-src-dir
+                               (build-path abs-src-dir base)))))
+           (define rel-dest (find-relative-path (simplify-path abs-src-dir #f)
+                                                (simplify-path dest #f)))
+           (unless (and (relative-path? rel-dest)
+                        (not (memq 'up (explode-path rel-dest))))
+             (error 's3-sync
+                    (~a "link does not stay within directory\n"
+                        "  source path: ~a\n"
+                        "  destination path: ~a")
+                    f
+                    raw-dest))
+           rel-dest]))
       
       (define (b+k key)
         (~a bucket "/" key))
@@ -559,7 +576,7 @@
         (define new (file-md5 (and (not in-link) f) (or call-with-file-stream call-with-input-file*)))
         (cond
          [(and (equal? old new)
-               (not (and upload? check-metadata?)))
+               (not (and upload? (or check-metadata? in-link))))
           (void)]
          [upload?
           (define do-upload-props-specific
@@ -583,11 +600,19 @@
              [else upload-props]))
           (define do-upload-props
             (merge-hash do-upload-props-shared do-upload-props-specific))
+          (define (get-link-rel-path)
+            (if (url? in-link)
+                (url->string in-link)
+                (string-append
+                 "/"
+                 (encode-path (in-sub (slashify in-link))))))
           (cond
-           [(and check-metadata?
+            [(and (or check-metadata? in-link)
                  (equal? old new))
             (set! check-metadata (cons (list key f (if in-link
-                                                       do-upload-props
+                                                       (hash-set do-upload-props
+                                                                 'x-amz-website-redirect-location
+                                                                 (get-link-rel-path))
                                                        (hash-set do-upload-props
                                                                  'Content-Type
                                                                  content-type)))
@@ -596,8 +621,13 @@
            [else
             (define task-id (get-task-id))
             (log-info (format "Upload: ~a as: ~a~a~a"
-                              (format-to f key)
-                              (if in-link 'redirect content-type)
+                              (format-to f key in-link)
+                              (if in-link
+                                  (format "redirect to: ~a"
+                                          (if (url? in-link)
+                                              (url->string in-link)
+                                              in-link))
+                                  content-type)
                               (if content-encoding (format " ~a" content-encoding) "")
                               (task-id-str task-id)))
             (unless dry-run?
@@ -615,12 +645,8 @@
                      call-with-file-stream
                      (or content-type "application/octet-stream")
                      (cond
-                       [in-link
-                        (define rel-path
-                          (string-append
-                           "/"
-                           (encode-path (in-sub (slashify in-link)))))
-                        (hash-set do-upload-props 'x-amz-website-redirect-location rel-path)]
+                       [in-link 
+                        (hash-set do-upload-props 'x-amz-website-redirect-location (get-link-rel-path))]
                        [else
                         do-upload-props])))
                   (when s
@@ -646,11 +672,11 @@
           (set)]
          [else
           (parameterize ([current-directory src-dir])
-            (let loop ([f #f] [f-key #f] [in-link #f] [result (set)])
+            (let loop ([f #f] [f-key #f] [in-link #f] [result (set)] [force-redirect? #f])
               (cond
                [(not f)
                 (for/fold ([result result]) ([s (filter use-src-dir? (directory-list))])
-                  (loop s (path-element->string s) #f result))]
+                  (loop s (path-element->string s) #f result #f))]
                [(not (and (or (included? (in-sub f-key))
                               (directory-exists? f))
                           (case link-mode
@@ -660,14 +686,21 @@
                 result]
                [(and (not in-link)
                      (eq? link-mode 'redirects)
-                     (link-exists? f))
-                (loop f f-key (link->dest f) result)]
-               [(directory-exists? f)
+                     (or (link-exists? f)
+                         (and redirect-as-link
+                              (redirect-as-link* f))))
+                (loop f f-key (link->dest f) result #t)]
+               [(and (directory-exists? f)
+                     (not force-redirect?))
                 (for/fold ([result result]) ([s (filter use-src-dir? (directory-list f))])
                   (loop (build-path f s)
                         (in-sub s f-key)
-                        (and in-link (build-path in-link s))
-                        result))]
+                        (and in-link
+                             (if (url? in-link)
+                                 (combine-url/relative in-link (slashify s))
+                                 (build-path in-link s)))
+                        result
+                        #f))]
                [(or (file-exists? f)
                     ;; the target of a link doesn't have to exist
                     (and in-link
@@ -681,7 +714,7 @@
       (sync-tasks)
       
       (when (and upload?
-                 check-metadata?)
+                 (pair? check-metadata))
         (define bucket-acl (get-acl (~a bucket "/")))
         (for ([e (in-list check-metadata)])
           (define-values (key f upload-props) (apply values e))
@@ -715,7 +748,13 @@
           
           (unless (and same-acl? same-other-props?)
             (define task-id (get-task-id))
-            (log-info (format "Upload metadata: ~a~a" (format-to key f) (task-id-str task-id)))
+            (log-info (format "Upload metadata: ~a~a~a"
+                              (format-to key f)
+                              (let ([in-link (hash-ref upload-props 'x-amz-website-redirect-location #f)])
+                                (if in-link
+                                    (format " redirect to: ~a" in-link)
+                                    ""))
+                              (task-id-str task-id)))
             (unless dry-run?
               (task!
                task-id
@@ -785,7 +824,19 @@
               (define rel-dest (link->dest f))
               (redirect-prefix-routing-rule
                #:old-prefix (in-sub (slashify f))
-               #:new-prefix (in-sub (slashify rel-dest))))))
+               #:new-host (and (url? rel-dest)
+                               (url-host rel-dest))
+               #:new-protocol (and (url? rel-dest)
+                                   (case (url-scheme rel-dest)
+                                     [("http") 'http]
+                                     [("https") 'https]
+                                     [else (error 's3-sync "unsupported scheme for URL redirect in ~s" rel-dest)]))
+               #:new-prefix (if (url? rel-dest)
+                                (url->string (struct-copy url rel-dest
+                                                          [scheme #f]
+                                                          [host #f]
+                                                          [port #f]))
+                                (in-sub (slashify rel-dest)))))))
         (unless (null? link-content)
           (add-routing-rules bucket link-content #:log-info log-info #:error error))))))
 
@@ -849,6 +900,7 @@
   (define upload-metadata (hash))
   (define upload-metadata-mapping (hash))
   (define reduced-redundancy? #f)
+  (define redirect-as-link #f)
 
   (define upload-metadata-mapping-proc
     (lambda (key)
@@ -955,6 +1007,9 @@
               (lambda (key)
                 (merge-hash (proc key)
                             (web-upload-metadata-mapping key)))))]
+     #:once-each
+     [("--redirect-to-prefix") rx url "Redirect path matching <rx> to <url>"
+      (set! redirect-as-link (web-make-redirect-download (check-regexp rx) (string->url url)))]
      #:args
      (src dest)
      (values src dest)))
@@ -987,7 +1042,7 @@
                         (string=? s "/"))
                     #f
                     s)))))
-
+  
   (with-handlers ([exn:fail? (lambda _ (ensure-have-keys))])
     (credentials-from-environment!))
 
@@ -1019,6 +1074,7 @@
            #:get-content-encoding gzip-content-encoding
            #:log displayln
            #:link-mode link-mode
+           #:redirect-as-link redirect-as-link
            #:delete? delete?
            #:dry-run? dry-run?
            #:jobs jobs
