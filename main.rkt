@@ -36,7 +36,7 @@
 
 (define (encode-path p)
   (string-join
-   (map uri-unreserved-encode (string-split p "/"))
+   (map uri-encode (string-split p "/"))
    "/"))
 
 (define (merge-hash orig additional)
@@ -286,7 +286,7 @@
          [(not remote-content-as-directory)
           (define remote-content-as-file
             (and clean-sub
-                 (ls/proc (~a bucket "/" (encode-path clean-sub))
+                 (ls/proc (~a bucket "/" clean-sub)
                           #:delimiter "/"
                           (let ([sub-name (last (string-split clean-sub "/"))])
                             (make-ls-handler (lambda ()
@@ -884,6 +884,7 @@
 
   (define s3-hostname "s3.amazonaws.com")
   (define use-region #f)
+  (define use-scheme "https")
 
   (define dry-run? #f)
   (define jobs 1)
@@ -984,6 +985,11 @@
      [("--region") region "Set S3 region (instead of issuing a query)"
       (set! use-region region)]
      #:once-any
+     [("--http") "Use HTTP to contact S3"
+      (set! use-scheme "http")]
+     [("--https") "Use HTTPS to contact S3"
+      (set! use-scheme "https")]
+     #:once-any
      [("--error-links") "Treat soft links as errors (the default)"
       (set! link-mode 'error)]
      [("--redirect-links") "Treat soft links as a table of redirection rules"
@@ -1051,6 +1057,8 @@
   (s3-region
    (or use-region
        (bucket-location s3-bucket)))
+
+  (s3-scheme use-scheme)
 
   (define-values (call-with-gzip-file gzip-content-encoding)
     (if gzip-rx
