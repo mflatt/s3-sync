@@ -121,6 +121,9 @@ The following options (supply them after @exec{s3-sync} and before
        @nonterm{region} (e.g., @exec{us-east-1}) instead of issuing a
        query to locate the bucket's region.}
 
+ @item{@DFlag{https} --- contacts the S3 hostname using HTTPS (the default).}
+ @item{@DFlag{http} --- contacts the S3 hostname using HTTP.}
+
  @item{@DFlag{error-links} --- report an error if a soft link is found; this is the
        default treatment of soft links.}
  @item{@DFlag{follow-links} --- follow soft links.}
@@ -149,7 +152,8 @@ The following options (supply them after @exec{s3-sync} and before
 
 @history[#:changed "1.12" @elem{For uploading, always use shallow mode unless @DFlag{delete} is specified.}
          #:changed "1.14" @elem{Added the @DFlag{retries} option.}
-         #:changed "1.15" @elem{Added the @DFlag{redirect-to-prefix} option.}]
+         #:changed "1.15" @elem{Changed the default connection mode to HTTPS and
+                                added the @DFlag{http}, @DFlag{https}, and @DFlag{redirect-to-prefix} options.}]
 
 @section{S3 Synchronization API}
 

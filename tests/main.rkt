@@ -16,22 +16,47 @@
 
 (define data-file (build-path (find-system-path 'home-dir)
                               ".aws-tests-data"))
-(define bucket
-  (and (file-exists? data-file)
-       (call-with-input-file*
-        data-file
-        (lambda (i)
-          (define m (regexp-match #px"(?m:^test/bucket\\s+=\\s+([^\\s]*)\\s*$)" i))
-          (and m (bytes->string/utf-8 (cadr m)))))))
+(define (get-test-data key)
+  (call-with-input-file*
+   data-file
+   (lambda (i)
+     (define want-profile (or (getenv "AWS_DEFAULT_PROFILE") "default"))
+     (let loop ([profile "default"])
+       (define l (read-line i))
+       (cond
+         [(eof-object? l) #f]
+         [(regexp-match #px"^[[]([a-zA-Z0-9_]*)[]]$" l)
+          => (lambda (m)
+               (loop (cadr m)))]
+         [(not (equal? profile want-profile)) (loop profile)]
+         [(regexp-match #px"^([a-z/]*)\\s+=\\s+([^\\s]*)\\s*$" l)
+          => (lambda (m)
+               (if (equal? key (cadr m))
+                   (caddr m)
+                   (loop profile)))]
+         [else (loop profile)])))))
+
+(define bucket (get-test-data "test/bucket"))
 
 (unless bucket
   (printf "skipping s3-sync tests; could not find `test/bucket' entry in: ~a\n" data-file))
+
+(define use-s3-host (or (get-test-data "test/host") "s3.amazonaws.com"))
+(define use-s3-scheme (or (get-test-data "test/scheme") "http"))
+
+(define can-metadata? (equal? (or (get-test-data "test/metadata") "yes")
+                              "yes"))
+
+(printf "Using ~a at ~a://~a\n" bucket use-s3-scheme use-s3-host)
 
 (define skip-links? #f) ; or maybe (eq? (system-type) 'windows), since links are not always enabled
 
 (when bucket
   (define bucket/ (~a bucket "/"))
   (define dir (make-temporary-file "s3-sync-~a" 'directory))
+
+  (define (sorted ls)
+    (sort ls string<?))
 
   (define (create-file f content)
     (call-with-output-file*
@@ -62,7 +87,7 @@
           string<?))
 
   (define (get-link p)
-    (define h (head (~a bucket/ p)))
+    (define h (head (~a bucket/ (encode-path p))))
     (extract-field "x-amz-website-redirect-location" h))
 
   (define (encode-path p)
@@ -71,14 +96,15 @@
      "/"))
 
   (ensure-have-keys)
-  (s3-host "s3.amazonaws.com")
+  (s3-host use-s3-host)
+  (s3-scheme use-s3-scheme)
 
   (define step displayln)
 
   (define plan-count 0)
   (define download-plan-count 0)
   (define (count-planned s)
-    (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z][_@]test(:?[.]css)?" s)
+    (when (regexp-match? #rx"(?:Down|Up)load.*:.*[a-z][_@+]test(:?[.]css)?" s)
       (log-error ">> ~a" s)
       (set! plan-count (add1 plan-count))
       (when (regexp-match? #rx"Download" s)
@@ -94,7 +120,7 @@
     (check-equal? (ls bucket/) '())
 
     (create-file "x_test" "Wish I was ocean size")
-    (create-file "y_test" "They cannot move you")
+    (create-file "y+test" "They cannot move you")
     (create-file "z@test.css" "No one tries")
 
     (step "Dry run of upload")
@@ -105,7 +131,7 @@
 
     (step "Upload three files")
     (s3-sync dir bucket #f #:jobs jobs)
-    (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/)) (sorted '("x_test" "y+test" "z@test.css")))
 
     (step "Check upload needs no files")
     (set! plan-count 0)
@@ -128,7 +154,7 @@
 
     (step "Upload changed files")
     (create-file "x_test" "No one pulls you")
-    (create-file "y_test" "Out from your hole")
+    (create-file "y+test" "Out from your hole")
     (set! plan-count 0)
     (s3-sync dir bucket #f #:log count-planned #:jobs jobs
              #:upload-metadata (hash 'Cache-Control "max-age=0, no-cache"))
@@ -137,40 +163,41 @@
     (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
     (check-false (regexp-match? #rx"Cache-Control: max-age=0" (head (~a bucket/ (encode-path "z@test.css")))))
 
-    (step "Update metadata")
-    (set! plan-count 0)
-    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
-             #:upload-metadata (hash 'x-amz-meta-zub "7"))
-    (check-equal? plan-count 0)
-    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
-             #:check-metadata? #t
-             #:upload-metadata (hash 'x-amz-meta-zub "7"))
-    (check-equal? plan-count 6) ; checks plus uploads
-    (set! plan-count 0)
-    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
-             #:check-metadata? #t
-             #:upload-metadata (hash 'x-amz-meta-zub "7"))
-    (check-equal? plan-count 3) ; just checks
+    (when can-metadata?
+      (step "Update metadata")
+      (set! plan-count 0)
+      (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+               #:upload-metadata (hash 'x-amz-meta-zub "7"))
+      (check-equal? plan-count 0)
+      (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+               #:check-metadata? #t
+               #:upload-metadata (hash 'x-amz-meta-zub "7"))
+      (check-equal? plan-count 6) ; checks plus uploads
+      (set! plan-count 0)
+      (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+               #:check-metadata? #t
+               #:upload-metadata (hash 'x-amz-meta-zub "7"))
+      (check-equal? plan-count 3) ; just checks
 
-    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
-    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ (encode-path "z@test.css"))))
-    (check-regexp-match #rx"Content-Type: text/css" (head (~a bucket/ (encode-path "z@test.css"))))
+      (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
+      (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ (encode-path "z@test.css"))))
+      (check-regexp-match #rx"Content-Type: text/css" (head (~a bucket/ (encode-path "z@test.css"))))
 
-    (step "Merge metadata")
-    (set! plan-count 0)
-    (s3-sync dir bucket #f #:log count-planned #:jobs jobs
-             #:check-metadata? #t
-             #:upload-metadata (hash 'x-amz-meta-zub "7")
-             #:upload-metadata-mapping (hash "y_test" (hash 'x-amz-meta-zub "8")
-                                             "z@test.css" (hash 'x-amz-meta-biq "9")))
-    (check-equal? plan-count 5) ; checks plus 2 uploads
+      (step "Merge metadata")
+      (set! plan-count 0)
+      (s3-sync dir bucket #f #:log count-planned #:jobs jobs
+               #:check-metadata? #t
+               #:upload-metadata (hash 'x-amz-meta-zub "7")
+               #:upload-metadata-mapping (hash "y+test" (hash 'x-amz-meta-zub "8")
+                                               "z@test.css" (hash 'x-amz-meta-biq "9")))
+      (check-equal? plan-count 5) ; checks plus 2 uploads
 
-    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
-    (check-regexp-match #rx"x-amz-meta-zub: 8" (head (~a bucket/ "y_test")))
-    (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ (encode-path "z@test.css"))))
-    (check-regexp-match #rx"x-amz-meta-biq: 9" (head (~a bucket/ (encode-path "z@test.css"))))
-    (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ "x_test"))))
-    (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ "y_test"))))
+      (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ "x_test")))
+      (check-regexp-match #rx"x-amz-meta-zub: 8" (head (~a bucket/ (encode-path "y+test"))))
+      (check-regexp-match #rx"x-amz-meta-zub: 7" (head (~a bucket/ (encode-path "z@test.css"))))
+      (check-regexp-match #rx"x-amz-meta-biq: 9" (head (~a bucket/ (encode-path "z@test.css"))))
+      (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ "x_test"))))
+      (check-false (regexp-match? #rx"x-maz-meta-biq" (head (~a bucket/ (encode-path "y+test"))))))
 
     (step "Download and rename individual file")
     (set! plan-count 0)
@@ -182,17 +209,17 @@
     
     (step "Upload and rename individual file")
     (set! plan-count 0)
-    (s3-sync (build-path dir "y_test") bucket "like_y_test"
+    (s3-sync (build-path dir "y+test") bucket "like_y+test"
              #:log count-planned #:jobs jobs)
     (check-equal? plan-count 1)
-    (check-equal? (ls bucket/) '("like_y_test" "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/)) (sorted '("like_y+test" "x_test" "y+test" "z@test.css")))
 
     (step "Download individual file to directory")
     (set! plan-count 0)
-    (s3-sync dir bucket "like_y_test"
+    (s3-sync dir bucket "like_y+test"
              #:upload? #f #:log count-planned #:jobs jobs)
     (check-equal? plan-count 1)
-    (check-equal? (file-content "y_test") (file-content "like_y_test"))
+    (check-equal? (file-content "y+test") (file-content "like_y+test"))
 
     (step "Download removed files")
     (remove-file "x_test")
@@ -201,15 +228,15 @@
     (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
     (check-equal? plan-count 2)
     (check-equal? (file-content "x_test") "No one pulls you")
-    (check-equal? (file-content "y_test") "Out from your hole")
+    (check-equal? (file-content "y+test") "Out from your hole")
     (check-equal? (file-content "z@test.css") "No one tries")
-    (check-equal? (file-content "like_y_test") (file-content "y_test"))
+    (check-equal? (file-content "like_y+test") (file-content "y+test"))
 
     (cond
-      [skip-links?
-       (remove-file "like_y_test")
+      [(or skip-links? (not can-metadata?))
+       (remove-file "like_y+test")
        (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
-       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))]
+       (check-equal? (sorted (ls bucket/)) (sorted '("x_test" "y+test" "z@test.css")))]
       [else
        (step "Error on links")
        (create-link "z@test.css" "also_z_test")
@@ -223,7 +250,7 @@
 
        (step "Follow link")
        (s3-sync dir bucket #f #:jobs jobs #:link-mode 'follow)
-       (check-equal? (ls bucket/) '("also_z_test" "like_y_test" "x_test" "y_test" "z@test.css"))
+       (check-equal? (sorted (ls bucket/)) (sorted '("also_z_test" "like_y+test" "x_test" "y+test" "z@test.css")))
        (remove-file "also_z_test")
        (set! plan-count 0)
        (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
@@ -241,10 +268,10 @@
        (check-equal? plan-count 1)
        (check-equal? (file-content "also_z_test") "")
        (remove-file "also_z_test")
-       (remove-file "like_y_test")
+       (remove-file "like_y+test")
 
        (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
-       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
+       (check-equal? (sorted (ls bucket/)) (sorted '("x_test" "y+test" "z@test.css")))
 
        (step "Redirect directory link")
        (create-dir "sub")
@@ -254,7 +281,7 @@
        (remove-all "sub")
 
        (s3-sync dir bucket #f #:jobs jobs #:delete? #t)
-       (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))])
+       (check-equal? (sorted (ls bucket/)) (sorted '("x_test" "y+test" "z@test.css")))])
 
     (step "Upload to specified prefix")
     (make-directory (build-path dir "sub"))
@@ -263,15 +290,17 @@
     (set! plan-count 0)
     (s3-sync (build-path dir "sub") bucket "nested" #:log count-planned #:jobs jobs)
     (check-equal? plan-count 2)
-    (check-equal? (ls bucket/) '("nested/a_test" "nested/b_test"
-                                 "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/))
+                  (sorted '("nested/a_test" "nested/b_test"
+                                            "x_test" "y+test" "z@test.css")))
 
     (step "Upload file to specified prefix")
     (set! plan-count 0)
     (s3-sync (build-path dir "x_test") bucket "nested" #:log count-planned #:jobs jobs)
     (check-equal? plan-count 1)
-    (check-equal? (ls bucket/) '("nested/a_test" "nested/b_test" "nested/x_test"
-                                 "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/))
+                  (sorted '("nested/a_test" "nested/b_test" "nested/x_test"
+                                            "x_test" "y+test" "z@test.css")))
 
     (step "Cannot upload directory to file name")
     (check-exn (lambda (exn)
@@ -309,7 +338,7 @@
     (check-equal? (file-list)
                   '("a_test" "b_test"
                     "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+                    "x_test" "y+test" "z@test.css"))
     (remove-file "a_test")
     (remove-file "b_test")
 
@@ -319,7 +348,7 @@
     (check-equal? plan-count 0)
     (check-equal? (file-list)
                   '("sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+                    "x_test" "y+test" "z@test.css"))
 
     (step "Download to get newly nested path")
     (s3-sync dir bucket #f #:upload? #f #:log count-planned #:jobs jobs)
@@ -327,7 +356,7 @@
     (check-equal? (file-list)
                   '("nested/a_test" "nested/b_test" "nested/x_test"
                     "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+                    "x_test" "y+test" "z@test.css"))
 
     (step "Try that again")
     (remove-file "nested/a_test")
@@ -335,7 +364,7 @@
     (check-equal? (file-list)
                   '("nested/x_test"
                     "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+                    "x_test" "y+test" "z@test.css"))
     ;; "nested" directory still exists...
     (set! plan-count 0)
     (s3-sync dir bucket #f #:shallow? #t #:upload? #f #:log count-planned #:jobs jobs)
@@ -343,7 +372,7 @@
     (check-equal? (file-list)
                   '("nested/a_test" "nested/b_test" "nested/x_test"
                     "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+                    "x_test" "y+test" "z@test.css"))
 
     (step "Upload of already-there nested does nothing")
     (set! plan-count 0)
@@ -351,16 +380,16 @@
     (check-equal? plan-count 0)
 
     (step "Upload to add subpath")
-    (check-equal? (ls bucket/)
-                  '("nested/a_test" "nested/b_test" "nested/x_test"
-                    "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/))
+                  (sorted '("nested/a_test" "nested/b_test" "nested/x_test"
+                                            "x_test" "y+test" "z@test.css")))
     (set! plan-count 0)
     (s3-sync dir bucket #f #:shallow? #t #:log count-planned #:jobs jobs)
     (check-equal? plan-count 2)
-    (check-equal? (ls bucket/)
-                  '("nested/a_test" "nested/b_test" "nested/x_test"
-                    "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/))
+                  (sorted '("nested/a_test" "nested/b_test" "nested/x_test"
+                                            "sub/a_test" "sub/b_test"
+                                            "x_test" "y+test" "z@test.css")))
 
     (step "Nothing new to upload")
     (set! plan-count 0)
@@ -399,11 +428,11 @@
     (step "Upload file with same name as \"directory\"")
     (create-file "nested" "All action")
     (s3-sync dir bucket #f #:upload? #t #:jobs jobs)
-    (check-equal? (ls bucket/)
-                  '("nested"
-                    "nested/a_test" "nested/b_test" "nested/x_test" 
-                    "sub/a_test" "sub/b_test"
-                    "x_test" "y_test" "z@test.css"))
+    (check-equal? (sorted (ls bucket/))
+                  (sorted '("nested"
+                            "nested/a_test" "nested/b_test" "nested/x_test" 
+                            "sub/a_test" "sub/b_test"
+                            "x_test" "y+test" "z@test.css")))
     (check-exn (lambda (exn)
                  (and (exn:fail? exn)
                       (regexp-match #rx"both a file and a directory"
@@ -415,7 +444,7 @@
     (step "Download only immediate files (so no directory conflict)")
     (create-file "nested" "No talking")
     (s3-sync dir bucket #f #:upload? #f #:exclude #rx"/" #:jobs jobs)
-    (check-equal? (file-list) '("nested" "x_test" "y_test" "z@test.css"))
+    (check-equal? (file-list) '("nested" "x_test" "y+test" "z@test.css"))
     (check-equal? (file-content "nested") "All action")
 
     (step "Empty local directory")
@@ -433,7 +462,7 @@
     (check-equal? (ls bucket/) '())
 
     (create-file "x_test" "Wish I was ocean size")
-    (create-file "y_test" "They cannot move you")
+    (create-file "y+test" "They cannot move you")
     (create-file "z@test.css" "No one tries")
 
     (step "Dry run of upload")
@@ -442,7 +471,7 @@
 
     (step "Upload three files")
     (s3-web-sync dir bucket #f)
-    (check-equal? (ls bucket/) '("x_test" "y_test" "z@test.css"))
+    (check-equal? (ls bucket/) '("x_test" "y+test" "z@test.css"))
 
     (check-regexp-match #rx"Cache-Control: max-age=0" (head (~a bucket/ "x_test")))
     (check-regexp-match #rx"Cache-Control: max-age=31536000" (head (~a bucket/ (encode-path "z@test.css"))))
@@ -451,7 +480,8 @@
     (for ([f (in-list (directory-list dir #:build? #t))])
       (delete-directory/files f)))
 
-  (web-go)
+  (when can-metadata?
+    (web-go))
 
   (define (redirect-go)
     (step "Initialize test bucket to empty")
@@ -459,7 +489,7 @@
     (check-equal? (ls bucket/) '())
 
     (create-file "x_test" "Wish I was ocean size")
-    (create-link "x_test" "y_test")
+    (create-link "x_test" "y+test")
     (create-file "z_test" "No talking and all action")
     (create-dir "sub")
     (create-file "sub/a_test" "wave")
@@ -472,8 +502,8 @@
              #:redirect-as-link (web-make-redirect-download #rx"z_test|n_test"
                                                             (string->url "https://racket-lang.org/test/")))
     (check-equal? plan-count 5)
-    (check-equal? (ls bucket/) '("n_test" "sub/a_test" "x_test" "y_test" "z_test"))
-    (check-equal? (get-link "y_test") "/x_test")
+    (check-equal? (ls bucket/) '("n_test" "sub/a_test" "x_test" "y+test" "z_test"))
+    (check-equal? (get-link "y+test") "/x_test")
     (check-equal? (get-link "z_test") "https://racket-lang.org/test/z_test")
     (check-equal? (get-link "n_test") "https://racket-lang.org/test/sub")
 
@@ -486,7 +516,7 @@
                                                             (string->url "https://racket-lang.org/test2/")))
     (check-equal? plan-count 5)
     (check-equal? (- plan-count download-plan-count) 2)
-    (check-equal? (get-link "y_test") "/x_test")
+    (check-equal? (get-link "y+test") "/x_test")
     (check-equal? (get-link "z_test") "https://racket-lang.org/test2/z_test")
     (check-equal? (get-link "n_test") "https://racket-lang.org/test2/sub")
 
@@ -494,7 +524,8 @@
     (for ([f (in-list (directory-list dir #:build? #t))])
       (delete-directory/files f)))
 
-  (redirect-go)
+  (when can-metadata?
+    (redirect-go))
 
   (step "Clean up local directory")
   (delete-directory/files dir)
