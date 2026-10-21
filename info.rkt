@@ -8,7 +8,8 @@
 
 (define build-deps '("scribble-lib"
                      "racket-doc"
-                     "rackunit-lib"))
+                     "rackunit-lib"
+                     "net-doc"))
 
 (define scribblings '(("s3-sync.scrbl" () (tool))))
 
